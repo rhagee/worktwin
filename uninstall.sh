@@ -20,7 +20,7 @@ case "$MODE" in
     ;;
 esac
 
-for skill in worktwin worktwin-ship worktwin-ship-all worktwin-finalize worktwin-status; do
+for skill in worktwin worktwin-ship worktwin-ship-all worktwin-finalize worktwin-status worktwin-help; do
   rm -rf "$TARGET/$skill"
 done
 

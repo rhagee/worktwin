@@ -61,6 +61,12 @@ To see who is doing what at any point:
 /worktwin-status
 ```
 
+To see every worktwin command available, with arguments and a short description:
+
+```
+/worktwin-help
+```
+
 ## Shipping
 
 Three ways to wrap up, depending on what you want and what your workflow allows:
