@@ -52,6 +52,17 @@ detect_linux_fs() {
   stat -f -c %T "$p" 2>/dev/null || echo "unknown"
 }
 
+# BSD/macOS does not have stat -f-equivalent for filesystem name. We
+# resolve via df (mount point) then grep mount (filesystem type).
+detect_macos_fs() {
+  local p="$1" mp fs
+  mp=$(df "$p" 2>/dev/null | awk 'NR==2 {for (i=NF; i>=1; i--) if ($i ~ /^\//) { print $i; exit }}')
+  [ -z "$mp" ] && { echo "unknown"; return; }
+  fs=$(mount | grep " on $mp " | head -1 | sed -E 's/.* \(([a-z0-9]+)[,)].*/\1/')
+  [ -z "$fs" ] && fs="unknown"
+  echo "$fs"
+}
+
 try_reflink() {
   local dir="$1"
   local tmp src dst
@@ -70,7 +81,7 @@ try_reflink() {
 case "$OS_RAW" in
   Darwin)
     OS="darwin"
-    FS=$(stat -f %T "$ABS_PATH" 2>/dev/null || echo "unknown")
+    FS=$(detect_macos_fs "$ABS_PATH")
     case "$FS" in
       apfs)
         COW=true

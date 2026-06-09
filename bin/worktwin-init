@@ -183,7 +183,6 @@ else
     fi
     "$LIGHT_CLONE" "$CLONE_SOURCE" "$WORKTREE_PATH"
     git -C "$WORKTREE_PATH" read-tree --reset HEAD
-    WARNINGS+=("$LIGHT_REASON")
   else
     if git rev-parse --verify "$NEW_BRANCH" >/dev/null 2>&1; then
       git worktree add "$WORKTREE_PATH" "$NEW_BRANCH" >/dev/null
