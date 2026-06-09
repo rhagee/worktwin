@@ -39,6 +39,7 @@ $Skills = @(
     "worktwin-status",
     "worktwin-clear",
     "worktwin-light-doctor",
+    "worktwin-light-setup-windows",
     "worktwin-help",
     "worktwin-update"
 )
