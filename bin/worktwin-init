@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# worktwin-init - atomic spawn of a worktwin parallel worker.
+# Pluggable: usable from any skill or directly from a shell.
+set -e
+
+usage() {
+  cat <<'EOF'
+worktwin-init <from-branch> <new-branch> "<task>"
+
+Sets up a git worktree for a parallel worker. Verifies the repo,
+resolves the source branch (fetching from origin if needed), creates
+the worktree, and writes a state file inside the shared git directory.
+
+Prints a JSON object on stdout:
+{
+  "main_repo":  "/abs/path/to/repo",
+  "worktree":   "/abs/path/to/repo--slug",
+  "branch":     "<new-branch>",
+  "from_branch":"<from-branch>",
+  "from_ref":   "<from-branch or origin/from-branch>",
+  "state_file": "/abs/path/to/.git/parallel/slug.json",
+  "warnings":   [optional strings]
+}
+
+Exits non-zero on any error. Errors go to stderr.
+EOF
+}
+
+if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+  usage; exit 0
+fi
+
+if [ $# -lt 3 ]; then
+  echo "usage: worktwin-init <from-branch> <new-branch> \"<task>\"" >&2
+  exit 2
+fi
+
+FROM_BRANCH="$1"
+NEW_BRANCH="$2"
+TASK="$3"
+
+GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || true)
+if [ -z "$GIT_COMMON_DIR" ]; then
+  echo "ERROR: not inside a git repository" >&2
+  exit 1
+fi
+
+GIT_COMMON_DIR=$(cd "$GIT_COMMON_DIR" && pwd)
+MAIN_REPO=$(cd "$(dirname "$GIT_COMMON_DIR")" && pwd)
+REPO_NAME=$(basename "$MAIN_REPO")
+BRANCH_SLUG=$(echo "$NEW_BRANCH" | sed 's|[^a-zA-Z0-9._-]|-|g')
+WORKTREE_PATH="$(dirname "$MAIN_REPO")/${REPO_NAME}--${BRANCH_SLUG}"
+
+WARNINGS=()
+CURRENT_TOPLEVEL=$(git rev-parse --show-toplevel)
+if [ "$CURRENT_TOPLEVEL" != "$MAIN_REPO" ]; then
+  WARNINGS+=("invoked from a worktree, using main repo as base")
+fi
+
+if git rev-parse --verify "$FROM_BRANCH" >/dev/null 2>&1; then
+  FROM_REF="$FROM_BRANCH"
+elif git fetch origin "$FROM_BRANCH" >/dev/null 2>&1 \
+     && git rev-parse --verify "origin/$FROM_BRANCH" >/dev/null 2>&1; then
+  FROM_REF="origin/$FROM_BRANCH"
+else
+  echo "ERROR: source branch '$FROM_BRANCH' not found locally or on origin" >&2
+  exit 1
+fi
+
+if [ -d "$WORKTREE_PATH" ]; then
+  if ! git worktree list --porcelain | grep -q "^worktree $WORKTREE_PATH$"; then
+    echo "ERROR: $WORKTREE_PATH exists but is not a registered worktree" >&2
+    exit 1
+  fi
+  WARNINGS+=("worktree already registered, reusing")
+else
+  if git rev-parse --verify "$NEW_BRANCH" >/dev/null 2>&1; then
+    git worktree add "$WORKTREE_PATH" "$NEW_BRANCH" >/dev/null
+  else
+    git worktree add -b "$NEW_BRANCH" "$WORKTREE_PATH" "$FROM_REF" >/dev/null
+  fi
+fi
+
+PARALLEL_DIR="$GIT_COMMON_DIR/parallel"
+mkdir -p "$PARALLEL_DIR"
+STATE_FILE="$PARALLEL_DIR/${BRANCH_SLUG}.json"
+STARTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Minimal JSON escape for the fallback path. Handles backslash, quote,
+# newline, tab. ASCII-only inputs are the supported case.
+json_escape() {
+  local s="$1"
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\t'/\\t}
+  printf '%s' "$s"
+}
+
+write_state() {
+  if command -v jq >/dev/null 2>&1; then
+    jq -n \
+      --arg branch "$NEW_BRANCH" \
+      --arg from "$FROM_BRANCH" \
+      --arg worktree "$WORKTREE_PATH" \
+      --arg task "$TASK" \
+      --arg started "$STARTED_AT" \
+      '{branch:$branch, from_branch:$from, worktree:$worktree, task:$task, started_at:$started, status:"active"}' \
+      > "$STATE_FILE"
+  else
+    {
+      printf '{\n'
+      printf '  "branch": "%s",\n' "$(json_escape "$NEW_BRANCH")"
+      printf '  "from_branch": "%s",\n' "$(json_escape "$FROM_BRANCH")"
+      printf '  "worktree": "%s",\n' "$(json_escape "$WORKTREE_PATH")"
+      printf '  "task": "%s",\n' "$(json_escape "$TASK")"
+      printf '  "started_at": "%s",\n' "$STARTED_AT"
+      printf '  "status": "active"\n'
+      printf '}\n'
+    } > "$STATE_FILE"
+  fi
+}
+write_state
+
+emit_output() {
+  if command -v jq >/dev/null 2>&1; then
+    local warnings_json
+    warnings_json=$(printf '%s\n' "${WARNINGS[@]}" | jq -R . | jq -s .)
+    if [ ${#WARNINGS[@]} -eq 0 ]; then warnings_json='[]'; fi
+    jq -n \
+      --arg mainrepo "$MAIN_REPO" \
+      --arg worktree "$WORKTREE_PATH" \
+      --arg branch "$NEW_BRANCH" \
+      --arg from "$FROM_BRANCH" \
+      --arg fromref "$FROM_REF" \
+      --arg state "$STATE_FILE" \
+      --argjson warnings "$warnings_json" \
+      '{main_repo:$mainrepo, worktree:$worktree, branch:$branch, from_branch:$from, from_ref:$fromref, state_file:$state, warnings:$warnings}'
+  else
+    printf '{\n'
+    printf '  "main_repo": "%s",\n' "$(json_escape "$MAIN_REPO")"
+    printf '  "worktree": "%s",\n' "$(json_escape "$WORKTREE_PATH")"
+    printf '  "branch": "%s",\n' "$(json_escape "$NEW_BRANCH")"
+    printf '  "from_branch": "%s",\n' "$(json_escape "$FROM_BRANCH")"
+    printf '  "from_ref": "%s",\n' "$(json_escape "$FROM_REF")"
+    printf '  "state_file": "%s",\n' "$(json_escape "$STATE_FILE")"
+    if [ ${#WARNINGS[@]} -eq 0 ]; then
+      printf '  "warnings": []\n'
+    else
+      printf '  "warnings": ['
+      local first=1
+      for w in "${WARNINGS[@]}"; do
+        [ $first -eq 1 ] && first=0 || printf ', '
+        printf '"%s"' "$(json_escape "$w")"
+      done
+      printf ']\n'
+    fi
+    printf '}\n'
+  fi
+}
+emit_output
