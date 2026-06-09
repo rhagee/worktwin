@@ -28,9 +28,10 @@ Two Claude Code sessions, same repo, same file: chaos. Plain git worktrees give 
 - Claude Code
 - `gh` CLI, optional, for automatic pull requests
 - `jq`, optional, for safer state file parsing
-- Windows: run `install.sh` from Git Bash or WSL
 
 ## Install
+
+### macOS and Linux
 
 ```bash
 git clone https://github.com/rhagee/worktwin
@@ -39,7 +40,36 @@ cd worktwin
 ./install.sh local     # only this project
 ```
 
-To remove: `./uninstall.sh` with the same mode.
+Remove with `./uninstall.sh` (same mode argument).
+
+### Windows
+
+PowerShell, native:
+
+```powershell
+git clone https://github.com/rhagee/worktwin
+cd worktwin
+.\install.ps1          # global, available in every project
+.\install.ps1 local    # only this project
+```
+
+Remove with `.\uninstall.ps1` (same mode argument).
+
+If PowerShell blocks the script with `running scripts is disabled on this system`, either run it once with bypass:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Or whitelist your user one time (recommended):
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+If you prefer bash, `install.sh` still works from Git Bash or WSL.
+
+---
 
 Once installed, run `/worktwin-help` inside Claude Code at any time for the full list of commands, arguments, and short descriptions. The list is generated from the installed skills, so it always matches what is actually on your machine.
 

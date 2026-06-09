@@ -40,6 +40,24 @@ Worktwin sanitises the branch name to derive a folder name (replacing anything o
 
 Verify `CLAUDE.md` at the worktree root still contains the worktwin block. Root `CLAUDE.md` is re-read by Claude Code after compaction; nested ones are not. If the block is gone, re-run `/worktwin` to restore it.
 
-## Windows: `install.sh` does not run
+## Windows: which install script do I use?
 
-Run it from Git Bash or WSL. The script is POSIX shell, not a Windows batch file.
+Use `install.ps1` from PowerShell. The bash `install.sh` only runs from Git Bash or WSL because Windows opens `.sh` files with the default associated application (often the editor), instead of executing them.
+
+## Windows: `running scripts is disabled on this system`
+
+The default PowerShell execution policy blocks unsigned scripts on some machines. Two fixes:
+
+One-time bypass for a single run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Permanent for your user (recommended, this is the default on most developer machines anyway):
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Both keep the system-wide policy untouched.
