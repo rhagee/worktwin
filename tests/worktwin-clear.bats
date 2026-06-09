@@ -45,3 +45,46 @@ load test_helper
   [ "$status" -eq 0 ]
   [ ! -f "$TEST_REPO/.git/parallel/feat-gone.json" ]
 }
+
+@test "--all clears every clean worker" {
+  "$BIN_DIR/worktwin-init" main feat/a "a" >/dev/null
+  "$BIN_DIR/worktwin-init" main feat/b "b" >/dev/null
+  "$BIN_DIR/worktwin-init" main feat/c "c" >/dev/null
+  run "$BIN_DIR/worktwin-clear" --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"3 cleared"* ]]
+  [ -z "$(ls "$TEST_REPO/.git/parallel/" 2>/dev/null)" ]
+}
+
+@test "--all skips dirty workers unless --force is also set" {
+  "$BIN_DIR/worktwin-init" main feat/clean "clean" >/dev/null
+  "$BIN_DIR/worktwin-init" main feat/dirty "dirty" >/dev/null
+  echo scratch > "$TEST_BASE/myrepo--feat-dirty/scratch.txt"
+  run "$BIN_DIR/worktwin-clear" --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 cleared"* ]] || [[ "$output" == *"skipped"* ]]
+  [ ! -f "$TEST_REPO/.git/parallel/feat-clean.json" ]
+  [ -f "$TEST_REPO/.git/parallel/feat-dirty.json" ]
+}
+
+@test "--all --force clears everything including dirty workers" {
+  "$BIN_DIR/worktwin-init" main feat/clean "clean" >/dev/null
+  "$BIN_DIR/worktwin-init" main feat/dirty "dirty" >/dev/null
+  echo scratch > "$TEST_BASE/myrepo--feat-dirty/scratch.txt"
+  run "$BIN_DIR/worktwin-clear" --all --force
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"2 cleared"* ]]
+  [ -z "$(ls "$TEST_REPO/.git/parallel/" 2>/dev/null)" ]
+}
+
+@test "--all combined with a branch name errors out" {
+  "$BIN_DIR/worktwin-init" main feat/x "x" >/dev/null
+  run "$BIN_DIR/worktwin-clear" --all feat/x
+  [ "$status" -eq 2 ]
+}
+
+@test "--all without any workers prints a friendly message" {
+  run "$BIN_DIR/worktwin-clear" --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no active workers"* ]] || [[ "$output" == *"0 cleared"* ]]
+}

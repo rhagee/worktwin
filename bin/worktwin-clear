@@ -9,43 +9,52 @@ set -e
 usage() {
   cat <<'EOF'
 worktwin-clear [--force] <branch>
+worktwin-clear --all [--force]
 
 Removes the worktree directory (when present) and the parallel/ state
-file for <branch>. The branch itself is never deleted; if the branch
-was pushed and a PR is open, the work is safe on the remote.
+file for one worker (when a branch is given) or for every active worker
+(with --all). The branches themselves are never deleted.
 
 Default behaviour:
   - If the worktree directory is missing (stale state), remove the
     state file silently.
-  - If the worktree directory exists and the working tree is clean
-    (no uncommitted changes), run 'git worktree remove' and then
-    remove the state file.
-  - If the worktree has uncommitted changes, refuse and tell the
-    user to commit, stash, or pass --force.
+  - If the worktree exists and the working tree is clean, run
+    'git worktree remove' and then remove the state file.
+  - If the worktree has uncommitted changes, refuse and report.
 
 With --force, the worktree is removed regardless of uncommitted state
-(git worktree remove --force) and the state file goes too. Uncommitted
-work is lost.
+('git worktree remove --force') and the state file goes too.
+
+With --all, the same gates apply per-worker: dirty workers are skipped
+(or removed when --force is also set). The exit code is 0 even when
+some workers are skipped, so the user can re-run with --force after
+inspecting the report.
 EOF
 }
 
 FORCE=0
+ALL=0
 ARGS=()
 for arg in "$@"; do
   case "$arg" in
     -h|--help) usage; exit 0 ;;
     --force) FORCE=1 ;;
+    --all) ALL=1 ;;
     *) ARGS+=("$arg") ;;
   esac
 done
 set -- "${ARGS[@]}"
 
-if [ $# -lt 1 ]; then
-  echo "usage: worktwin-clear [--force] <branch>" >&2
+if [ $ALL -eq 0 ] && [ $# -lt 1 ]; then
+  echo "usage: worktwin-clear [--force] <branch>  OR  worktwin-clear --all [--force]" >&2
+  exit 2
+fi
+if [ $ALL -eq 1 ] && [ $# -gt 0 ]; then
+  echo "ERROR: do not combine --all with a branch name" >&2
   exit 2
 fi
 
-BRANCH="$1"
+BRANCH="${1:-}"
 
 GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || true)
 if [ -z "$GIT_COMMON_DIR" ]; then
@@ -55,6 +64,58 @@ fi
 GIT_COMMON_DIR=$(cd "$GIT_COMMON_DIR" && pwd)
 PARALLEL_DIR="$GIT_COMMON_DIR/parallel"
 
+# Clear a single worker by state file path.
+# Returns 0 on success, 1 if uncommitted and not forced, 2 on other error.
+clear_one() {
+  local file="$1"
+  local branch worktree uncommitted
+  branch=$(grep -m1 '"branch":' "$file" | sed -E 's/.*"branch":[[:space:]]*"([^"]*)".*/\1/')
+  worktree=$(grep -m1 '"worktree":' "$file" | sed -E 's/.*"worktree":[[:space:]]*"([^"]*)".*/\1/')
+
+  if [ -n "$worktree" ] && [ -d "$worktree" ]; then
+    uncommitted=$(git -C "$worktree" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$uncommitted" -gt 0 ] && [ $FORCE -eq 0 ]; then
+      echo "SKIP $branch ($worktree has $uncommitted uncommitted change(s))" >&2
+      return 1
+    fi
+    if [ $FORCE -eq 1 ]; then
+      git worktree remove --force "$worktree" 2>/dev/null || rm -rf "$worktree"
+    else
+      git worktree remove "$worktree" 2>/dev/null || true
+    fi
+    echo "removed worktree: $worktree"
+  fi
+  rm "$file"
+  echo "removed state: $file"
+  return 0
+}
+
+if [ $ALL -eq 1 ]; then
+  if [ ! -d "$PARALLEL_DIR" ]; then
+    echo "no active workers"
+    exit 0
+  fi
+  cleared=0
+  skipped=0
+  for f in "$PARALLEL_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    if clear_one "$f"; then
+      cleared=$((cleared + 1))
+    else
+      skipped=$((skipped + 1))
+    fi
+  done
+  echo ""
+  if [ $skipped -gt 0 ]; then
+    echo "summary: $cleared cleared, $skipped skipped (re-run with --force to discard their uncommitted work)"
+  else
+    echo "summary: $cleared cleared"
+  fi
+  git worktree prune 2>/dev/null || true
+  exit 0
+fi
+
+# Single-branch mode
 STATE_FILE=""
 if [ -d "$PARALLEL_DIR" ]; then
   for f in "$PARALLEL_DIR"/*.json; do
@@ -71,26 +132,9 @@ if [ -z "$STATE_FILE" ]; then
   exit 1
 fi
 
-WORKTREE=$(grep -m1 '"worktree":' "$STATE_FILE" | sed -E 's/.*"worktree":[[:space:]]*"([^"]*)".*/\1/')
-
-if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
-  # Check for uncommitted changes
-  UNCOMMITTED=$(git -C "$WORKTREE" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$UNCOMMITTED" -gt 0 ] && [ $FORCE -eq 0 ]; then
-    echo "ERROR: worktree at $WORKTREE has $UNCOMMITTED uncommitted change(s)" >&2
-    echo "Commit or stash them first, or pass --force to discard." >&2
-    exit 1
-  fi
-
-  if [ $FORCE -eq 1 ]; then
-    git worktree remove --force "$WORKTREE" 2>/dev/null || rm -rf "$WORKTREE"
-  else
-    git worktree remove "$WORKTREE"
-  fi
-  echo "removed worktree: $WORKTREE"
+if ! clear_one "$STATE_FILE"; then
+  echo "Commit, stash, or pass --force to discard." >&2
+  exit 1
 fi
-
-rm "$STATE_FILE"
-echo "removed state: $STATE_FILE"
 
 git worktree prune 2>/dev/null || true
