@@ -141,9 +141,21 @@ When the other three are also done, batch them out:
 
 ## How it works
 
-Short version: `git worktree` for filesystem isolation, a state file in the shared `.git` directory for cross-worktree discovery, and a marked block in the worktree's `CLAUDE.md` so the rules persist across `/compact` and new sessions.
+Short version: `git worktree` for filesystem isolation, a state file in the shared `.git` directory for cross-worktree discovery, and a marked block in the worktree's `CLAUDE.md` so the rules persist across `/compact` and new sessions. The mechanical work runs through scripts in `bin/` so it is deterministic and testable; the skills are thin orchestrators that let the agent handle the judgement parts (drafting PRs, deciding on warnings).
 
-Full breakdown in [docs/how-it-works.md](docs/how-it-works.md). Comparison with other tools in [docs/vs-other-tools.md](docs/vs-other-tools.md). Common issues in [docs/troubleshooting.md](docs/troubleshooting.md).
+Full breakdown in [docs/how-it-works.md](docs/how-it-works.md). Comparison with other tools in [docs/vs-other-tools.md](docs/vs-other-tools.md). The `bin/` script contract in [docs/scripts.md](docs/scripts.md). Common issues in [docs/troubleshooting.md](docs/troubleshooting.md).
+
+## Standalone CLI
+
+The `bin/` scripts work from any shell, not just from inside Claude Code. After install they land in `~/.claude/skills/worktwin/bin/`. Add that to your PATH to call them directly:
+
+```bash
+worktwin-init develop feat/auth "implement Google OAuth login"
+worktwin-list | jq -c 'select(.commits_ahead > 0)'
+worktwin-claude-md /path/to/worktree feat/auth develop "the task"
+```
+
+Full contract and usage in [docs/scripts.md](docs/scripts.md).
 
 ## Contributing
 
