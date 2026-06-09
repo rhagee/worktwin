@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# worktwin-light-base - manage the mapping from main repo paths to
+# light-mode base paths. Stored at ~/.claude/skills/worktwin/.light-bases.json.
+
+usage() {
+  cat <<'EOF'
+worktwin-light-base <subcommand> [args]
+
+Subcommands:
+  list                       Print every configured mapping, one JSON
+                             object per line (NDJSON).
+
+  get <main-path>            Print the JSON for the mapping that
+                             matches <main-path>, or exit non-zero if
+                             not configured.
+
+  set <main-path> <base-path>
+                             Add or update a mapping. <base-path> must
+                             already exist on disk and live on a CoW
+                             capable filesystem (check first with
+                             worktwin-light-check).
+
+  remove <main-path>         Drop a mapping. Does not touch the base
+                             directory itself.
+
+  path                       Print the absolute path of the config
+                             file. Useful for diagnostics.
+
+The config is local to the machine. It is not committed to any repo.
+EOF
+}
+
+CONFIG_FILE="${WORKTWIN_LIGHT_BASES_FILE:-$HOME/.claude/skills/worktwin/.light-bases.json}"
+
+ensure_config() {
+  local dir
+  dir=$(dirname "$CONFIG_FILE")
+  [ -d "$dir" ] || mkdir -p "$dir"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    printf '{"version":1,"bases":{}}' > "$CONFIG_FILE"
+  fi
+}
+
+read_config() {
+  ensure_config
+  cat "$CONFIG_FILE"
+}
+
+write_config() {
+  local content="$1"
+  printf '%s' "$content" > "$CONFIG_FILE"
+}
+
+cmd_list() {
+  ensure_config
+  if command -v jq >/dev/null 2>&1; then
+    jq -c '.bases | to_entries[] | {main_repo: .key, light_base: .value.light_base, created_at: .value.created_at, source_branch: .value.source_branch}' "$CONFIG_FILE"
+  else
+    # Fallback: emit a single warning line; full parsing without jq is
+    # error-prone for this format.
+    echo '{"warning":"jq required for list without ambiguity","raw":'"$(cat "$CONFIG_FILE")"'}' >&2
+    cat "$CONFIG_FILE"
+  fi
+}
+
+cmd_get() {
+  local main="$1"
+  [ -z "$main" ] && { echo "usage: worktwin-light-base get <main-path>" >&2; exit 2; }
+  ensure_config
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: jq is required for 'get'" >&2
+    exit 1
+  fi
+  local entry
+  entry=$(jq -c --arg main "$main" '.bases[$main] // empty' "$CONFIG_FILE")
+  if [ -z "$entry" ]; then
+    exit 1
+  fi
+  jq -c --arg main "$main" '{main_repo: $main} + .bases[$main]' "$CONFIG_FILE"
+}
+
+cmd_set() {
+  local main="$1"
+  local base="$2"
+  [ -z "$main" ] || [ -z "$base" ] && {
+    echo "usage: worktwin-light-base set <main-path> <base-path>" >&2
+    exit 2
+  }
+  if [ ! -d "$base" ]; then
+    echo "ERROR: base path does not exist: $base" >&2
+    exit 1
+  fi
+  # Try to resolve to absolute paths for consistency
+  main=$(cd "$main" 2>/dev/null && pwd || echo "$main")
+  base=$(cd "$base" && pwd)
+  ensure_config
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: jq is required for 'set'" >&2
+    exit 1
+  fi
+  local now
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  local updated
+  updated=$(jq --arg main "$main" --arg base "$base" --arg now "$now" \
+    '.bases[$main] = (.bases[$main] // {}) + {light_base: $base, created_at: (.bases[$main].created_at // $now), updated_at: $now}' \
+    "$CONFIG_FILE")
+  write_config "$updated"
+  echo "set: $main -> $base"
+}
+
+cmd_remove() {
+  local main="$1"
+  [ -z "$main" ] && { echo "usage: worktwin-light-base remove <main-path>" >&2; exit 2; }
+  ensure_config
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: jq is required for 'remove'" >&2
+    exit 1
+  fi
+  local before after
+  before=$(jq '.bases | length' "$CONFIG_FILE")
+  after=$(jq --arg main "$main" 'del(.bases[$main])' "$CONFIG_FILE")
+  write_config "$after"
+  local removed
+  removed=$(jq '.bases | length' "$CONFIG_FILE")
+  if [ "$before" = "$removed" ]; then
+    echo "no mapping was set for $main" >&2
+    exit 1
+  fi
+  echo "removed: $main"
+}
+
+cmd_path() {
+  printf '%s\n' "$CONFIG_FILE"
+}
+
+case "${1:--h}" in
+  -h|--help|help) usage; exit 0 ;;
+  list)   shift; cmd_list "$@" ;;
+  get)    shift; cmd_get "$@" ;;
+  set)    shift; cmd_set "$@" ;;
+  remove) shift; cmd_remove "$@" ;;
+  path)   shift; cmd_path "$@" ;;
+  *)
+    echo "unknown subcommand: $1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
