@@ -24,7 +24,7 @@ if [ -z "$SOURCE_FILE" ]; then
   exit 0
 fi
 
-SOURCE_ROOT=$(cat "$SOURCE_FILE" | tr -d '\r\n' | tr '\\' '/')
+SOURCE_ROOT=$(cat "$SOURCE_FILE" | sed '1s/^\xef\xbb\xbf//' | tr -d '\r\n' | tr '\\' '/')
 if [ ! -d "$SOURCE_ROOT" ]; then
   echo "Recorded source path no longer exists: $SOURCE_ROOT"
   echo "Re-run install.sh or install.ps1 from the current path of your cloned worktwin repo."

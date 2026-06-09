@@ -59,9 +59,12 @@ if (Test-Path $BinSrc) {
 # Record where this clone lives so worktwin-update can find it later.
 # Forward slashes so the path is consumable by both PowerShell and bash
 # (Git Bash on Windows does not understand backslash paths in test -d).
+# UTF-8 without BOM so bash does not read a stray zero-width character
+# at the start of the path (Set-Content -Encoding utf8 on 5.1 adds a BOM).
 $SourceFile = Join-Path $Target "worktwin\.source"
 $NormalisedPath = $PSScriptRoot -replace '\\', '/'
-Set-Content -Path $SourceFile -Value $NormalisedPath -Encoding utf8 -NoNewline
+$Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText($SourceFile, $NormalisedPath, $Utf8NoBom)
 
 Write-Host "worktwin installed to $Target"
 Write-Host ""
