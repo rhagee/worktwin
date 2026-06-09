@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# worktwin-claude-md - write or update the worktwin rules block in a
+# worktree's CLAUDE.md. Idempotent. Preserves anything outside the block.
+set -e
+
+usage() {
+  cat <<'EOF'
+worktwin-claude-md <worktree-path> <branch> <from-branch> "<task>"
+
+Writes or updates the worktwin rules block in <worktree-path>/CLAUDE.md.
+The block is delimited by:
+
+  <!-- BEGIN worktwin -->
+  ...
+  <!-- END worktwin -->
+
+Idempotent: running twice with the same arguments produces the same file.
+Any content outside the markers is preserved. Existing block is replaced
+in place.
+
+Errors go to stderr, non-zero exit on failure. No stdout on success.
+EOF
+}
+
+if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then usage; exit 0; fi
+if [ $# -lt 4 ]; then
+  echo "usage: worktwin-claude-md <worktree-path> <branch> <from-branch> \"<task>\"" >&2
+  exit 2
+fi
+
+WORKTREE="$1"
+BRANCH="$2"
+FROM="$3"
+TASK="$4"
+
+if [ ! -d "$WORKTREE" ]; then
+  echo "ERROR: worktree directory not found: $WORKTREE" >&2
+  exit 1
+fi
+
+CLAUDE_FILE="$WORKTREE/CLAUDE.md"
+BEGIN_MARKER="<!-- BEGIN worktwin -->"
+END_MARKER="<!-- END worktwin -->"
+
+write_block() {
+  cat <<EOF
+$BEGIN_MARKER
+# worktwin parallel worker rules
+
+This session is bound to branch \`$BRANCH\` in worktree \`$WORKTREE\`,
+based on \`$FROM\`. These rules apply for the whole session, every
+follow-up message, and any new Claude Code session opened in this directory.
+
+DO
+- Work only inside \`$WORKTREE\`.
+- Stay on branch \`$BRANCH\` for the entire session.
+- Make atomic commits with messages like \`feat(scope): description\`.
+- After each meaningful unit of work, commit.
+- If the user asks you to continue or iterate, keep working on the same branch.
+
+DO NOT
+- Run \`git checkout\` or \`git switch\` to a different branch.
+- Modify files outside \`$WORKTREE\`.
+- Run \`git merge\` or \`git rebase\` unless the user explicitly asks.
+- Delete the \`parallel/\` state files.
+- Push to any branch other than \`$BRANCH\`.
+
+Task: $TASK
+$END_MARKER
+EOF
+}
+
+if [ -f "$CLAUDE_FILE" ]; then
+  REST=$(awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
+    $0 == b { skip=1; next }
+    $0 == e { skip=0; next }
+    !skip
+  ' "$CLAUDE_FILE")
+  # Strip leading blank lines from the surviving content
+  REST=$(printf '%s\n' "$REST" | awk 'NF || started { started=1; print }')
+  {
+    write_block
+    if [ -n "$REST" ]; then
+      printf '\n%s\n' "$REST"
+    fi
+  } > "$CLAUDE_FILE.tmp"
+  mv "$CLAUDE_FILE.tmp" "$CLAUDE_FILE"
+else
+  write_block > "$CLAUDE_FILE"
+fi
