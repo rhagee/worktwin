@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# worktwin-help - print every installed worktwin command, with arguments
+# and a short description, by reading the installed SKILL.md frontmatter.
+# Cheap, deterministic, safe to spam.
+
+SKILLS_DIR=""
+
+# Try self-locate first: script may live at <skills>/worktwin/bin/.
+SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+if [ -n "$SCRIPT_DIR" ]; then
+  CANDIDATE="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd)"
+  if [ -n "$CANDIDATE" ] && [ -f "$CANDIDATE/worktwin/SKILL.md" ]; then
+    SKILLS_DIR="$CANDIDATE"
+  fi
+fi
+
+# Fallbacks for direct CLI use outside an install location.
+if [ -z "$SKILLS_DIR" ] && [ -f "$HOME/.claude/skills/worktwin/SKILL.md" ]; then
+  SKILLS_DIR="$HOME/.claude/skills"
+fi
+if [ -z "$SKILLS_DIR" ]; then
+  REPO=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "$REPO" ] && [ -f "$REPO/.claude/skills/worktwin/SKILL.md" ]; then
+    SKILLS_DIR="$REPO/.claude/skills"
+  fi
+fi
+
+if [ -z "$SKILLS_DIR" ]; then
+  echo "worktwin does not seem to be installed on this machine."
+  echo "see https://github.com/rhagee/worktwin"
+  exit 0
+fi
+
+ORDER="worktwin worktwin-status worktwin-ship worktwin-ship-all worktwin-finalize worktwin-update worktwin-help"
+
+emit() {
+  local file="$1/SKILL.md"
+  [ -f "$file" ] || return
+  local name hint desc short
+  name=$(basename "$1")
+  hint=$(grep -m1 '^argument-hint:' "$file" | sed -e 's/^argument-hint: *//' -e 's/^"//' -e 's/"$//')
+  desc=$(grep -m1 '^description:' "$file" | sed 's/^description: *//')
+  short=$(echo "$desc" | sed 's/\. [A-Z].*/./')
+  if [ -n "$hint" ]; then
+    echo "/$name $hint"
+  else
+    echo "/$name"
+  fi
+  echo "  $short"
+  echo ""
+}
+
+for name in $ORDER; do
+  [ -d "$SKILLS_DIR/$name" ] && emit "$SKILLS_DIR/$name"
+done
+
+for dir in "$SKILLS_DIR"/worktwin*/; do
+  name=$(basename "$dir")
+  case " $ORDER " in
+    *" $name "*) ;;
+    *) emit "$dir" ;;
+  esac
+done
+
+echo "docs: https://github.com/rhagee/worktwin"
