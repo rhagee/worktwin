@@ -39,6 +39,7 @@ $order = @(
     "worktwin-ship-all",
     "worktwin-finalize",
     "worktwin-clear",
+    "worktwin-light-doctor",
     "worktwin-update",
     "worktwin-help"
 )
