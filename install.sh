@@ -27,18 +27,22 @@ if [ ! -d "$SRC" ]; then
 fi
 
 mkdir -p "$TARGET"
-for skill in worktwin worktwin-ship worktwin-ship-all worktwin-finalize worktwin-status worktwin-help; do
+for skill in worktwin worktwin-ship worktwin-ship-all worktwin-finalize worktwin-status worktwin-help worktwin-update; do
   rm -rf "$TARGET/$skill"
   cp -r "$SRC/$skill" "$TARGET/"
 done
 
-BIN_SRC="$(cd "$(dirname "$0")" && pwd)/bin"
+SOURCE_ROOT="$(cd "$(dirname "$0")" && pwd)"
+BIN_SRC="$SOURCE_ROOT/bin"
 if [ -d "$BIN_SRC" ]; then
   BIN_DST="$TARGET/worktwin/bin"
   mkdir -p "$BIN_DST"
   cp "$BIN_SRC"/* "$BIN_DST/"
   chmod +x "$BIN_DST"/worktwin-init "$BIN_DST"/worktwin-claude-md "$BIN_DST"/worktwin-list 2>/dev/null || true
 fi
+
+# Record where this clone lives so worktwin-update can find it later
+printf '%s\n' "$SOURCE_ROOT" > "$TARGET/worktwin/.source"
 
 echo "worktwin installed to $TARGET"
 echo

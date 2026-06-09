@@ -37,7 +37,8 @@ $Skills = @(
     "worktwin-ship-all",
     "worktwin-finalize",
     "worktwin-status",
-    "worktwin-help"
+    "worktwin-help",
+    "worktwin-update"
 )
 
 foreach ($Skill in $Skills) {
@@ -54,6 +55,10 @@ if (Test-Path $BinSrc) {
     if (-not (Test-Path $BinDst)) { New-Item -ItemType Directory -Path $BinDst -Force | Out-Null }
     Copy-Item -Path (Join-Path $BinSrc "*") -Destination $BinDst -Recurse -Force
 }
+
+# Record where this clone lives so worktwin-update can find it later
+$SourceFile = Join-Path $Target "worktwin\.source"
+Set-Content -Path $SourceFile -Value $PSScriptRoot -Encoding utf8
 
 Write-Host "worktwin installed to $Target"
 Write-Host ""

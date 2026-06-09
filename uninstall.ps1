@@ -27,7 +27,8 @@ $Skills = @(
     "worktwin-ship-all",
     "worktwin-finalize",
     "worktwin-status",
-    "worktwin-help"
+    "worktwin-help",
+    "worktwin-update"
 )
 
 foreach ($Skill in $Skills) {

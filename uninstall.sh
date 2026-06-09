@@ -20,9 +20,9 @@ case "$MODE" in
     ;;
 esac
 
-for skill in worktwin worktwin-ship worktwin-ship-all worktwin-finalize worktwin-status worktwin-help; do
+for skill in worktwin worktwin-ship worktwin-ship-all worktwin-finalize worktwin-status worktwin-help worktwin-update; do
   rm -rf "$TARGET/$skill"
 done
-# bin/ is removed as part of the worktwin skill directory above
+# bin/ and .source live inside the worktwin skill dir and are removed with it
 
 echo "worktwin removed from $TARGET"
