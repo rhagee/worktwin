@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# worktwin-list - discover worktwin workers and emit one JSON per line.
+# Consumed by worktwin-status, worktwin-ship, worktwin-ship-all, worktwin-finalize.
+set -e
+
+usage() {
+  cat <<'EOF'
+worktwin-list [branch1 branch2 ...]
+
+Discovers worktwin workers on the current repository and emits one JSON
+object per line on stdout (NDJSON). With no arguments, lists every
+worker found in the shared git directory. With arguments, filters to
+those branch names.
+
+Each line:
+  {
+    "branch":          "...",
+    "from_branch":     "...",
+    "worktree":        "...",
+    "task":            "...",
+    "started_at":      "...",
+    "status":          "active",
+    "worktree_exists": true|false,
+    "commits_ahead":   N,
+    "files_changed":   N,
+    "uncommitted":     N
+  }
+
+jq is recommended for robust parsing of state files that contain
+quotes or other special characters in the task string.
+EOF
+}
+
+if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then usage; exit 0; fi
+
+GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || true)
+if [ -z "$GIT_COMMON_DIR" ]; then
+  echo "ERROR: not inside a git repository" >&2
+  exit 1
+fi
+GIT_COMMON_DIR=$(cd "$GIT_COMMON_DIR" && pwd)
+PARALLEL_DIR="$GIT_COMMON_DIR/parallel"
+[ -d "$PARALLEL_DIR" ] || exit 0
+
+FILTER=("$@")
+HAVE_JQ=0
+command -v jq >/dev/null 2>&1 && HAVE_JQ=1
+
+extract_field() {
+  local file="$1" field="$2"
+  if [ $HAVE_JQ -eq 1 ]; then
+    jq -r ".${field} // empty" "$file"
+  else
+    grep -m1 "\"${field}\":" "$file" \
+      | sed -E 's/.*"'"$field"'": *"([^"]*)".*/\1/'
+  fi
+}
+
+emit_worker() {
+  local file="$1"
+  local branch from worktree task started status
+  branch=$(extract_field "$file" "branch")
+  from=$(extract_field "$file" "from_branch")
+  worktree=$(extract_field "$file" "worktree")
+  task=$(extract_field "$file" "task")
+  started=$(extract_field "$file" "started_at")
+  status=$(extract_field "$file" "status")
+
+  if [ ${#FILTER[@]} -gt 0 ]; then
+    local match=0
+    for f in "${FILTER[@]}"; do
+      [ "$f" = "$branch" ] && match=1 && break
+    done
+    [ $match -eq 0 ] && return
+  fi
+
+  local exists=false commits=0 files=0 uncommitted=0
+  if [ -d "$worktree" ]; then
+    exists=true
+    commits=$(git -C "$worktree" log "${from}..${branch}" --oneline 2>/dev/null | wc -l | tr -d ' ')
+    files=$(git -C "$worktree" diff --name-only "${from}..${branch}" 2>/dev/null | wc -l | tr -d ' ')
+    uncommitted=$(git -C "$worktree" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  fi
+
+  if [ $HAVE_JQ -eq 1 ]; then
+    jq -n -c \
+      --arg branch "$branch" \
+      --arg from "$from" \
+      --arg worktree "$worktree" \
+      --arg task "$task" \
+      --arg started "$started" \
+      --arg status "$status" \
+      --argjson exists "$exists" \
+      --argjson commits "$commits" \
+      --argjson files "$files" \
+      --argjson uncommitted "$uncommitted" \
+      '{branch:$branch, from_branch:$from, worktree:$worktree, task:$task, started_at:$started, status:$status, worktree_exists:$exists, commits_ahead:$commits, files_changed:$files, uncommitted:$uncommitted}'
+  else
+    printf '{"branch":"%s","from_branch":"%s","worktree":"%s","task":"%s","started_at":"%s","status":"%s","worktree_exists":%s,"commits_ahead":%d,"files_changed":%d,"uncommitted":%d}\n' \
+      "$branch" "$from" "$worktree" "$task" "$started" "$status" "$exists" "$commits" "$files" "$uncommitted"
+  fi
+}
+
+for f in "$PARALLEL_DIR"/*.json; do
+  [ -e "$f" ] || continue
+  emit_worker "$f"
+done
