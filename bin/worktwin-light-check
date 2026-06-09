@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# worktwin-light-check - detect whether a path lives on a filesystem
+# that supports copy-on-write file cloning. Used by worktwin to decide
+# if light mode (0-overhead worktrees) is available on this machine.
+
+usage() {
+  cat <<'EOF'
+worktwin-light-check [path]
+
+Detects whether [path] (default: current directory) sits on a
+copy-on-write capable filesystem (APFS on macOS, btrfs or XFS with
+reflink on Linux, ReFS on Windows). Emits a JSON object on stdout.
+
+Output schema:
+{
+  "os":             "darwin" | "linux" | "windows",
+  "filesystem":     "<fs name>",
+  "cow_capable":    true | false,
+  "path":           "<absolute path>",
+  "reason":         "<one-line explanation>",
+  "recommendation": "ready" | "switch-path" | "create-volume" | "remount" |
+                    "filesystem-not-supported" | "run-powershell-mirror"
+}
+
+Exit code is always 0 unless the script itself errors. Capability is
+in the JSON, not in the exit code.
+EOF
+}
+
+if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then usage; exit 0; fi
+
+PATH_ARG="${1:-$(pwd)}"
+ABS_PATH=$(cd "$PATH_ARG" 2>/dev/null && pwd || echo "$PATH_ARG")
+
+OS_RAW=$(uname -s)
+OS=""
+FS=""
+COW=false
+REASON=""
+RECOMMENDATION="filesystem-not-supported"
+
+detect_linux_fs() {
+  local p="$1" fs
+  if command -v findmnt >/dev/null 2>&1; then
+    fs=$(findmnt -no FSTYPE -T "$p" 2>/dev/null)
+    if [ -n "$fs" ]; then echo "$fs"; return; fi
+  fi
+  if command -v df >/dev/null 2>&1; then
+    fs=$(df -T "$p" 2>/dev/null | awk 'NR==2 {print $2}')
+    if [ -n "$fs" ]; then echo "$fs"; return; fi
+  fi
+  stat -f -c %T "$p" 2>/dev/null || echo "unknown"
+}
+
+try_reflink() {
+  local dir="$1"
+  local tmp src dst
+  tmp=$(mktemp -d -p "$dir" 2>/dev/null) || tmp=$(mktemp -d)
+  src="$tmp/wt-cow-src"
+  dst="$tmp/wt-cow-dst"
+  echo "x" > "$src"
+  if cp --reflink=always "$src" "$dst" >/dev/null 2>&1; then
+    rm -rf "$tmp"
+    return 0
+  fi
+  rm -rf "$tmp"
+  return 1
+}
+
+case "$OS_RAW" in
+  Darwin)
+    OS="darwin"
+    FS=$(stat -f %T "$ABS_PATH" 2>/dev/null || echo "unknown")
+    case "$FS" in
+      apfs)
+        COW=true
+        REASON="APFS supports clonefile natively"
+        RECOMMENDATION="ready"
+        ;;
+      *)
+        REASON="filesystem '$FS' on macOS does not support clonefile"
+        RECOMMENDATION="switch-path"
+        ;;
+    esac
+    ;;
+
+  Linux)
+    OS="linux"
+    FS=$(detect_linux_fs "$ABS_PATH")
+    case "$FS" in
+      btrfs)
+        COW=true
+        REASON="btrfs supports reflink natively"
+        RECOMMENDATION="ready"
+        ;;
+      xfs)
+        if try_reflink "$ABS_PATH"; then
+          COW=true
+          REASON="XFS with reflink enabled"
+          RECOMMENDATION="ready"
+        else
+          REASON="XFS volume is mounted without reflink=1"
+          RECOMMENDATION="remount"
+        fi
+        ;;
+      zfs)
+        if try_reflink "$ABS_PATH"; then
+          COW=true
+          REASON="ZFS with block_cloning enabled"
+          RECOMMENDATION="ready"
+        else
+          REASON="ZFS without block_cloning (needs kernel 5.3+ and OpenZFS 2.2+)"
+          RECOMMENDATION="filesystem-not-supported"
+        fi
+        ;;
+      *)
+        REASON="filesystem '$FS' on Linux does not support reflink"
+        RECOMMENDATION="filesystem-not-supported"
+        ;;
+    esac
+    ;;
+
+  MINGW*|MSYS*|CYGWIN*)
+    OS="windows"
+    REASON="bash on Windows cannot inspect ReFS volumes reliably, run the PowerShell mirror"
+    RECOMMENDATION="run-powershell-mirror"
+    ;;
+
+  *)
+    OS="unknown"
+    REASON="unrecognised OS: $OS_RAW"
+    RECOMMENDATION="filesystem-not-supported"
+    ;;
+esac
+
+if command -v jq >/dev/null 2>&1; then
+  jq -n \
+    --arg os "$OS" \
+    --arg fs "$FS" \
+    --argjson cow "$COW" \
+    --arg path "$ABS_PATH" \
+    --arg reason "$REASON" \
+    --arg recommendation "$RECOMMENDATION" \
+    '{os:$os, filesystem:$fs, cow_capable:$cow, path:$path, reason:$reason, recommendation:$recommendation}'
+else
+  esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  printf '{"os":"%s","filesystem":"%s","cow_capable":%s,"path":"%s","reason":"%s","recommendation":"%s"}\n' \
+    "$(esc "$OS")" "$(esc "$FS")" "$COW" "$(esc "$ABS_PATH")" "$(esc "$REASON")" "$(esc "$RECOMMENDATION")"
+fi
