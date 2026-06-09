@@ -23,5 +23,6 @@ esac
 for skill in worktwin worktwin-ship worktwin-ship-all worktwin-finalize worktwin-status worktwin-help; do
   rm -rf "$TARGET/$skill"
 done
+# bin/ is removed as part of the worktwin skill directory above
 
 echo "worktwin removed from $TARGET"

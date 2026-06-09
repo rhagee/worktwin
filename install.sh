@@ -32,6 +32,15 @@ for skill in worktwin worktwin-ship worktwin-ship-all worktwin-finalize worktwin
   cp -r "$SRC/$skill" "$TARGET/"
 done
 
+BIN_SRC="$(cd "$(dirname "$0")" && pwd)/bin"
+if [ -d "$BIN_SRC" ]; then
+  BIN_DST="$TARGET/worktwin/bin"
+  mkdir -p "$BIN_DST"
+  cp "$BIN_SRC"/* "$BIN_DST/"
+  chmod +x "$BIN_DST"/worktwin-init "$BIN_DST"/worktwin-claude-md "$BIN_DST"/worktwin-list 2>/dev/null || true
+fi
+
 echo "worktwin installed to $TARGET"
 echo
 echo "Run /worktwin-help inside Claude Code to see every command."
+echo "Standalone CLI tools at $TARGET/worktwin/bin"

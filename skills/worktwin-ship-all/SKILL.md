@@ -2,43 +2,51 @@
 name: worktwin-ship-all
 description: Push and open or update GitHub pull requests for every active worktwin worker on the current repository. Use at the end of a session when everything is ready to go out together. Takes no arguments.
 disable-model-invocation: true
-allowed-tools: Bash(git *), Bash(gh *), Bash(cat *), Bash(ls *), Bash(find *), Bash(mkdir *), Bash(echo *), Bash(comm *), Bash(sort *), Bash(jq *), Bash(grep *), Read
+allowed-tools: Bash(git *), Bash(gh *), Bash(ls *), Bash(test *), Bash(jq *), Bash(grep *), Read
 ---
 
 # worktwin-ship-all
 
-Ship every active worker on this repository in one go. Same behaviour as `/worktwin-ship`, except the worker list is discovered automatically instead of passed in.
+Ship every active worker in one go. Same workflow as `/worktwin-ship`, but the worker set is discovered instead of passed in.
 
-## 1. Discover all workers
+## 1. Locate the bin directory
 
 ```bash
-PARALLEL_DIR="$(git rev-parse --git-common-dir)/parallel"
+WORKTWIN_BIN=""
+for try in "$HOME/.claude/skills/worktwin/bin" \
+           "$(git rev-parse --show-toplevel 2>/dev/null)/.claude/skills/worktwin/bin"; do
+  if [ -d "$try" ]; then WORKTWIN_BIN="$try"; break; fi
+done
+[ -z "$WORKTWIN_BIN" ] && { echo "ERROR: worktwin bin/ not found" >&2; exit 1; }
 ```
 
-Read every `*.json` file in `$PARALLEL_DIR`. Each one is a worker: `branch`, `from_branch`, `worktree`, `task`, `started_at`, `status`.
+## 2. Discover all workers
 
-If the directory does not exist or is empty, fall back to `git worktree list --porcelain` and infer workers from any worktree whose branch differs from the main checkout.
+```bash
+"$WORKTWIN_BIN/worktwin-list"
+```
 
-If nothing is found, print `no active worktwin workers, nothing to ship` and stop.
+If the output is empty, print `no active worktwin workers, nothing to ship` and stop.
 
-## 2. Confirm scope with the user
+## 3. Confirm scope
 
-Before doing anything destructive, list the workers you found and ask the user to confirm shipping the full set. If they want a subset, tell them to use `/worktwin-ship <branch>` instead.
+List the discovered workers and ask the user to confirm shipping the full set. If they want a subset, tell them to use `/worktwin-ship <branch>` instead.
 
-## 3. Per-worker summary, conflict detection, push, PR
+## 4. Follow the ship workflow
 
-Follow the same steps as `/worktwin-ship` (sections 3 through 6 of that skill):
+Apply the same per-worker steps as `/worktwin-ship`:
 
-- Collect commit list, diff, file count for each worker.
-- Pairwise real conflict detection with `git merge-tree --write-tree`. File overlap from `comm` stays as a weak informational signal.
-- Pick the remote, check `gh` availability.
-- For each worker with commits ahead: push, then create or update the PR. Drafts only.
-- Draft the PR title and body per worker by actually reading the commits, the diff, the task, and the repo's conventions (`CONTRIBUTING.md`, recent commit messages). No fixed template. End the body with `Opened by worktwin.`.
-- If `gh` is missing or unauthenticated, print manual commands and skip the PR step for that branch.
+- Skip workers with `commits_ahead == 0`
+- Pairwise real conflict detection with `git merge-tree --write-tree`
+- Pick the remote (prefer `origin`)
+- Check `gh` availability
+- Push each branch, then create or update its draft PR
+- Draft the PR title and body per worker by reading commits, diff, task, and repo conventions (`CONTRIBUTING.md`, last 20 base-branch commit messages). No fixed template. End the body with `Opened by worktwin.`
+- If `gh` is missing or unauthenticated, print manual commands and skip the PR step
 
-## 4. Optional cleanup
+## 5. Optional cleanup
 
-Ask once at the end whether to clean up every shipped worker, or do it per-worker if the user prefers granular control:
+Ask once at the end whether to clean up every shipped worker, or do it per-worker if the user prefers:
 
 ```bash
 git worktree remove "<worktree>"
@@ -47,7 +55,7 @@ rm "$(git rev-parse --git-common-dir)/parallel/<slug>.json"
 
 Do not auto-delete branches.
 
-## 5. Final table
+## 6. Final table
 
 Recap every shipped worker:
 

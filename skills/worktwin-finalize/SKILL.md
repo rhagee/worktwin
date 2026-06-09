@@ -4,50 +4,48 @@ description: Wrap up worktwin workers locally without pushing or creating pull r
 argument-hint: "[branch1 branch2 ...]   leave empty to finalize all active workers"
 arguments: [branches]
 disable-model-invocation: true
-allowed-tools: Bash(git *), Bash(cat *), Bash(ls *), Bash(find *), Bash(echo *), Bash(jq *), Bash(grep *), Read
+allowed-tools: Bash(git *), Bash(ls *), Bash(test *), Bash(jq *), Bash(grep *), Read
 ---
 
 # worktwin-finalize
 
-Report on one or more workers and draft what their pull request would look like, without touching the remote. Read-only with respect to git remotes: no push, no `gh` calls, no PR creation.
+Report on one or more workers and draft what their pull request would look like, without touching the remote. No `git push`, no `gh` calls.
 
-## 1. Discover the target workers
+## 1. Locate the bin directory
 
 ```bash
-PARALLEL_DIR="$(git rev-parse --git-common-dir)/parallel"
+WORKTWIN_BIN=""
+for try in "$HOME/.claude/skills/worktwin/bin" \
+           "$(git rev-parse --show-toplevel 2>/dev/null)/.claude/skills/worktwin/bin"; do
+  if [ -d "$try" ]; then WORKTWIN_BIN="$try"; break; fi
+done
+[ -z "$WORKTWIN_BIN" ] && { echo "ERROR: worktwin bin/ not found" >&2; exit 1; }
 ```
 
-If the user passed branch arguments, restrict the set to those. Otherwise read every `*.json` in `$PARALLEL_DIR`. Fall back to `git worktree list --porcelain` if the parallel directory is empty.
+## 2. Discover workers
 
-If nothing is found, print `no active worktwin workers to finalize` and stop.
+```bash
+"$WORKTWIN_BIN/worktwin-list" "$@"
+```
 
-## 2. Per-worker report
+If the user passed branch arguments, the script already filters to those. If the output is empty, print `no active worktwin workers to finalize` and stop.
 
-For each worker, gather and print:
+## 3. Per-worker report
+
+For each worker, print:
 
 - Branch and base branch
 - Worktree path
-- Assigned task (from the state file)
-- Commit list: `git log <from_branch>..<branch>` (full messages, not just `--oneline`)
+- Assigned task
+- Commit list: `git log <from_branch>..<branch>` (with bodies)
 - File changes: `git diff --name-status <from_branch>..<branch>`
 - Working tree status: `git -C "<worktree>" status --porcelain`. Warn if uncommitted changes are present, because they would be lost on the suggested push.
 
-## 3. Draft the PR content
+## 4. Draft the PR content
 
-For each worker, draft a real pull request title and body, the way a developer would. Read:
+For each worker, draft a real PR title and body the way a developer would. Read the full commit messages, the diff, the task, and the repo's `CONTRIBUTING.md` plus the last 20 base-branch commit messages (`git log <from_branch> -20 --format='%s'`) to match the project's conventions.
 
-- The full commit messages, for the substance.
-- The diff, for what actually changed.
-- The repository's `CONTRIBUTING.md` if present, and the last 20 commit messages on the base branch (`git log <from_branch> -20 --format='%s'`), to match the project's tone and conventions.
-
-Then write:
-
-- A title that matches the conventions you observed.
-- A body that explains what changed and why, with a bullet list of notable commits or files, plus any caveats.
-
-Keep it short. Two or three paragraphs plus bullets is the right size for most PRs.
-
-Print the draft in a clearly delimited block so the user can copy it without picking it apart:
+Then print the draft in a clearly delimited block so it is easy to copy:
 
 ```
 --- suggested PR for <branch> ---
@@ -57,11 +55,11 @@ title: <title>
 --- end ---
 ```
 
-Append a single trailing line at the bottom of the body: `Opened by worktwin.`
+End the body with a single trailing line: `Opened by worktwin.`
 
-## 4. Hand the user the manual commands
+## 5. Manual commands
 
-For each finalized worker, print the exact commands they need to ship it themselves, with placeholders already filled in:
+For each finalized worker, print the exact commands the user needs to ship it themselves, with placeholders already filled in:
 
 ```
 git push <remote> <branch>
@@ -70,16 +68,16 @@ gh pr create --base <from_branch> --head <branch> --title "<title>" --body "<bod
 
 Pick the remote with `git remote | grep -x origin || git remote | head -n1`. If no remote is configured, print only the `git push` placeholder and tell the user to add a remote first.
 
-## 5. No cleanup, no state changes
+## 6. No state changes
 
-Finalize must not remove worktrees, must not delete state files, must not push, must not call `gh`. The whole point of this command is that the user is in control of the network side. Leave everything as it is.
+Finalize must not remove worktrees, must not delete state files, must not push, must not call `gh`.
 
-## 6. Final table
+## 7. Final table
 
-End with a recap:
+Recap every finalized worker:
 
 ```
 | Branch | Base | Commits | Files | Uncommitted | Ready |
 ```
 
-`Ready` is `yes` for workers with commits ahead and a clean tree, `no` for workers with uncommitted changes or zero commits.
+`Ready` is `yes` if commits ahead > 0 and uncommitted == 0, `no` otherwise.

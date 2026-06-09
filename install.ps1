@@ -48,6 +48,14 @@ foreach ($Skill in $Skills) {
     Copy-Item -Path (Join-Path $Src $Skill) -Destination $Target -Recurse -Force
 }
 
+$BinSrc = Join-Path $PSScriptRoot "bin"
+if (Test-Path $BinSrc) {
+    $BinDst = Join-Path $Target "worktwin\bin"
+    if (-not (Test-Path $BinDst)) { New-Item -ItemType Directory -Path $BinDst -Force | Out-Null }
+    Copy-Item -Path (Join-Path $BinSrc "*") -Destination $BinDst -Recurse -Force
+}
+
 Write-Host "worktwin installed to $Target"
 Write-Host ""
 Write-Host "Run /worktwin-help inside Claude Code to see every command."
+Write-Host "Standalone CLI tools at $Target\worktwin\bin"

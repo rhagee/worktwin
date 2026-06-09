@@ -1,39 +1,39 @@
 ---
 name: worktwin-status
-description: List every active worktwin worker on the current repository with their branch, worktree path, task, and progress. Use when the user wants a quick overview without entering the ship flow.
+description: List every active worktwin worker on the current repository with their branch, worktree path, task, and progress. Use when the user wants a quick overview without entering a shipping flow.
 disable-model-invocation: true
-allowed-tools: Bash(git *), Bash(cat *), Bash(ls *), Bash(jq *), Read
+allowed-tools: Bash(git *), Bash(ls *), Bash(test *), Bash(jq *), Read
 ---
 
 # worktwin-status
 
-Show a quick report of every active parallel worker for the current repository. Read-only, no side effects.
+Show every active worker on the current repository. Read-only, no side effects.
 
-## 1. Locate the state directory
+## 1. Locate the bin directory
 
 ```bash
-PARALLEL_DIR="$(git rev-parse --git-common-dir)/parallel"
+WORKTWIN_BIN=""
+for try in "$HOME/.claude/skills/worktwin/bin" \
+           "$(git rev-parse --show-toplevel 2>/dev/null)/.claude/skills/worktwin/bin"; do
+  if [ -d "$try" ]; then WORKTWIN_BIN="$try"; break; fi
+done
+if [ -z "$WORKTWIN_BIN" ]; then
+  echo "ERROR: worktwin bin/ not found. Did install.sh / install.ps1 complete?" >&2
+  exit 1
+fi
 ```
 
-If the directory does not exist or is empty, print `no active worktwin workers` and stop.
+## 2. List workers
 
-## 2. Read each state file
+```bash
+"$WORKTWIN_BIN/worktwin-list"
+```
 
-For every `*.json` file in `$PARALLEL_DIR`, extract `branch`, `from_branch`, `worktree`, `task`, `started_at`.
+The script emits one JSON line per worker (NDJSON) with: `branch`, `from_branch`, `worktree`, `task`, `started_at`, `worktree_exists`, `commits_ahead`, `files_changed`, `uncommitted`. With no parallel directory it exits silently with no output.
 
-If `jq` is available, parse with `jq -r '...'`. Otherwise read the file and parse the fields directly.
+If the output is empty, print `no active worktwin workers` and stop.
 
-## 3. Per-worker progress
-
-For each worker, with the worktree still present on disk:
-
-- Commits ahead: `git -C "<worktree>" log "<from_branch>..<branch>" --oneline | wc -l`
-- Files changed: `git -C "<worktree>" diff --name-only "<from_branch>..<branch>" | wc -l`
-- Uncommitted changes: `git -C "<worktree>" status --porcelain | wc -l`
-
-If the worktree path is missing on disk, flag the worker as `stale (worktree gone)`.
-
-## 4. Output
+## 3. Render
 
 Print one compact table:
 
@@ -41,4 +41,10 @@ Print one compact table:
 | Branch | Base | Worktree | Commits | Files | Uncommitted | Task |
 ```
 
-Truncate the task column to a sensible width. Append a single hint line below: `run /worktwin-ship <branch> to ship one, /worktwin-ship-all for the batch, or /worktwin-finalize for a local-only summary`.
+For workers where `worktree_exists` is `false`, replace the worktree column with `stale (worktree gone)` and the metric columns with `-`. Truncate the task column to a sensible width.
+
+Append a single hint line below the table:
+
+```
+run /worktwin-ship <branch> to ship one, /worktwin-ship-all for the batch, or /worktwin-finalize for a local-only summary
+```
