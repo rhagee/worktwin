@@ -73,6 +73,12 @@ If you prefer bash, `install.sh` still works from Git Bash or WSL.
 
 Once installed, run `/worktwin-help` inside Claude Code at any time for the full list of commands, arguments, and short descriptions. The list is generated from the installed skills, so it always matches what is actually on your machine.
 
+### Updating
+
+After `git pull` in the cloned repo, re-deploy with `./update.sh` (or `.\update.ps1` on Windows). Both do `git pull --ff-only` and re-run the matching install script.
+
+You can also trigger the same flow from inside Claude Code with `/worktwin-update`. The installer records the path of the cloned repo so the skill knows where to pull from.
+
 ## Quick start
 
 Two terminals, same repository:
