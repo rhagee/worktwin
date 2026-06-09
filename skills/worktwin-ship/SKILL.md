@@ -100,25 +100,44 @@ Keep it tight. Two or three short paragraphs plus a bullet list is usually enoug
 
 End the body with a single trailing line: `Opened by worktwin.`
 
-## 7. Optional cleanup
+## 7. Cleanup after successful ship
 
-After PRs are open or updated, ask the user whether to clean up the shipped workers:
+Shipping is the worker's terminal event. As soon as a worker is shipped successfully, it should disappear from `/worktwin-status`: the worktree directory is removed and the state file in `parallel/` is deleted. The remote branch and the open PR are untouched, so the work itself is preserved on GitHub.
+
+Run cleanup for each worker that satisfies ALL of these:
+
+- Push succeeded
+- PR was either created or updated (or, if `gh` was unavailable, the user got the manual commands)
+- The worker was clean (`uncommitted == 0`)
+
+Do not clean up:
+
+- Workers with `commits_ahead == 0` that were skipped (nothing happened, nothing to undo)
+- Workers with `dirty` status (uncommitted changes would be lost on `git worktree remove`)
+- Workers where the push or PR step errored out (the user may want to retry)
+
+For each worker that passes the gate:
 
 ```bash
 git worktree remove "<worktree>"
 rm "$(git rev-parse --git-common-dir)/parallel/<slug>.json"
 ```
 
-Do not auto-delete the branch.
+Do not delete the branch. The branch lives on the remote with an open PR; deleting it locally is fine when `git worktree remove` cleans up the working copy, but you do not need to touch refs/heads explicitly.
+
+If the user later wants to keep iterating on the same branch, they can spawn it again with `/worktwin <from> <branch> "..."` and worktwin will reattach the existing branch in a fresh worktree.
+
+If the user wants to push and open a PR without losing the worktree (e.g. they expect to iterate again before the PR is reviewed), they should run `/worktwin-finalize` instead: that command produces the same PR draft and the same push command but never touches the local state.
 
 ## 8. Final table
 
 Recap only the shipped subset:
 
 ```
-| Branch | Base | Commits | Files | PR | Conflict | Status |
+| Branch | Base | Commits | Files | PR | Conflict | Status | Cleaned |
 ```
 
 - PR: PR number, or `manual` if `gh` was not used, or `skipped (no commits)` for workers with nothing ahead.
 - Conflict: `clean`, `files overlap`, or `blocking`.
 - Status: `clean` when the working tree was empty, or `dirty (N uncommitted)` when the worker left a non-empty working tree behind. Dirty is reportable, not blocking; the committed work shipped, the uncommitted tail did not.
+- Cleaned: `yes` if the worktree and state file were removed after a successful ship, `no (<reason>)` otherwise (dirty, no commits, push or PR error).

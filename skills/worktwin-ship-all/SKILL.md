@@ -46,25 +46,42 @@ Apply the same per-worker steps as `/worktwin-ship`:
 - Draft the PR title and body per worker by reading commits, diff, task, and repo conventions (`CONTRIBUTING.md`, last 20 base-branch commit messages). No fixed template. End the body with `Opened by worktwin.`
 - If `gh` is missing or unauthenticated, print manual commands and skip the PR step
 
-## 5. Optional cleanup
+## 5. Cleanup after successful ship
 
-After PRs are open or updated, ask once at the end whether to clean up every shipped worker:
+Shipping is the worker's terminal event. Each worker that ships successfully is removed from local state so it stops appearing in `/worktwin-status`. The remote branch and the open PR are not touched; the work is safe on GitHub.
+
+For each worker, run cleanup only when ALL of these hold:
+
+- Push succeeded
+- PR was either created or updated (or the manual commands were printed because `gh` was unavailable)
+- The worker was clean (`uncommitted == 0`)
+
+Skip cleanup for workers that:
+
+- Were skipped because `commits_ahead == 0` (nothing happened, nothing to undo)
+- Have `dirty` status (uncommitted changes would be lost on `git worktree remove`)
+- Errored during push or PR creation
+
+For each worker that passes the gate:
 
 ```bash
 git worktree remove "<worktree>"
 rm "$(git rev-parse --git-common-dir)/parallel/<slug>.json"
 ```
 
-Do not auto-delete branches.
+Do not ask the user. The cleanup is part of "shipping is done", not a separate question.
+
+If the user wants to push and open a PR without losing the worktree, they should use `/worktwin-finalize` instead: that command produces the same PR draft and the same push command but never touches the local state.
 
 ## 6. Final table
 
 Recap every shipped worker:
 
 ```
-| Branch | Base | Commits | Files | PR | Conflict | Status |
+| Branch | Base | Commits | Files | PR | Conflict | Status | Cleaned |
 ```
 
 - PR: PR number, or `manual` if `gh` was not used, or `skipped (no commits)` for workers with nothing ahead.
 - Conflict: `clean`, `files overlap`, or `blocking`.
 - Status: `clean` when the working tree was empty, or `dirty (N uncommitted)` when the worker left a non-empty working tree behind. Dirty is reportable, not blocking; the committed work shipped, the uncommitted tail did not.
+- Cleaned: `yes` if the worktree and state file were removed after a successful ship, `no (<reason>)` otherwise (dirty, no commits, push or PR error).
