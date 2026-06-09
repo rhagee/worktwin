@@ -59,11 +59,12 @@ End the body with a single trailing line: `Opened by worktwin.`
 
 ## 5. Manual commands
 
-For each finalized worker, print the exact commands the user needs to ship it themselves, with placeholders already filled in:
+For each finalized worker, print the exact commands the user needs to ship it themselves, with placeholders already filled in. Default to a normal PR; mention `--draft` as the optional flag they can add:
 
 ```
 git push <remote> <branch>
-gh pr create --base <from_branch> --head <branch> --title "<title>" --body "<body>" --draft
+gh pr create --base <from_branch> --head <branch> --title "<title>" --body "<body>"
+# add --draft at the end of the gh command if you want a draft PR
 ```
 
 Pick the remote with `git remote | grep -x origin || git remote | head -n1`. If no remote is configured, print only the `git push` placeholder and tell the user to add a remote first.

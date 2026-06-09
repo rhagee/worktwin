@@ -1,7 +1,7 @@
 ---
 name: worktwin-ship
-description: Push and open or update GitHub pull requests for one or more specific worktwin workers. Use when a subset of parallel workers are done and you want to ship them without touching the others. Requires at least one branch argument.
-argument-hint: '<branch> [<branch> ...]'
+description: Push and open or update GitHub pull requests for one or more specific worktwin workers. Use when a subset of parallel workers are done and you want to ship them without touching the others. Requires at least one branch argument. Accepts a --draft flag to open PRs in draft mode.
+argument-hint: '[--draft] <branch> [<branch> ...]'
 arguments: [branches]
 disable-model-invocation: true
 allowed-tools: Bash(git *), Bash(gh *), Bash(ls *), Bash(test *), Bash(jq *), Bash(grep *), Read
@@ -9,14 +9,21 @@ allowed-tools: Bash(git *), Bash(gh *), Bash(ls *), Bash(test *), Bash(jq *), Ba
 
 # worktwin-ship
 
-Ship the specific workers passed as arguments. Push their branches, open or update draft pull requests, and report.
+Ship the specific workers passed as arguments. Push their branches, open or update pull requests, and report.
 
-## 1. Require explicit branches
+## 1. Parse arguments
 
-If no argument was passed, stop with:
+Walk through `$@` and split the input into:
+
+- A boolean `DRAFT` flag. Set to true if `--draft` appears anywhere.
+- The list of branch names. Everything that is not a flag.
+
+Default behaviour (no `--draft`) opens or updates normal pull requests. With `--draft`, every PR opened in this run is a draft. Existing PRs are not converted between draft and ready; only new ones honour the flag.
+
+If after stripping flags no branch argument remains, stop with:
 
 ```
-worktwin-ship requires at least one branch. Use /worktwin-ship <branch> or /worktwin-ship-all.
+worktwin-ship requires at least one branch. Use /worktwin-ship [--draft] <branch> or /worktwin-ship-all.
 ```
 
 ## 2. Locate the bin directory
@@ -79,10 +86,10 @@ For each worker:
    PR_NUM=$(gh pr list --head "<branch>" --json number --jq '.[0].number // empty')
    ```
 
-   - Empty: open a new draft PR with `gh pr create --base "<from_branch>" --head "<branch>" --title "<title>" --body "<body>" --draft`.
-   - Set: update with `gh pr edit "$PR_NUM" --title "<title>" --body "<body>"`. Optionally add a short comment summarising new commits.
+   - Empty: open a new PR with `gh pr create --base "<from_branch>" --head "<branch>" --title "<title>" --body "<body>"`. Append `--draft` when the `DRAFT` flag from step 1 was set.
+   - Set: update with `gh pr edit "$PR_NUM" --title "<title>" --body "<body>"`. Optionally add a short comment summarising new commits. Do not toggle the existing PR's draft state.
 
-3. If `gh` is missing or unauthenticated, print the manual `git push` and `gh pr create` commands for the user and skip the PR step for that branch.
+3. If `gh` is missing or unauthenticated, print the manual `git push` and `gh pr create` commands for the user and skip the PR step for that branch. Include `--draft` in the printed command when the flag was set.
 
 ## 6. Draft the PR title and body
 

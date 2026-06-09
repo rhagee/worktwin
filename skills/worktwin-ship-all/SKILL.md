@@ -1,6 +1,7 @@
 ---
 name: worktwin-ship-all
-description: Push and open or update GitHub pull requests for every active worktwin worker on the current repository. Use at the end of a session when everything is ready to go out together. Takes no arguments.
+description: Push and open or update GitHub pull requests for every active worktwin worker on the current repository. Use at the end of a session when everything is ready to go out together. Accepts a --draft flag to open PRs in draft mode.
+argument-hint: '[--draft]'
 disable-model-invocation: true
 allowed-tools: Bash(git *), Bash(gh *), Bash(ls *), Bash(test *), Bash(jq *), Bash(grep *), Read
 ---
@@ -8,6 +9,10 @@ allowed-tools: Bash(git *), Bash(gh *), Bash(ls *), Bash(test *), Bash(jq *), Ba
 # worktwin-ship-all
 
 Ship every active worker in one go. Same workflow as `/worktwin-ship`, but the worker set is discovered instead of passed in.
+
+## 0. Parse the optional --draft flag
+
+Check `$@` for `--draft`. If present, every PR opened in this run is a draft. Default (no flag) opens normal PRs. Existing PRs are not converted between draft and ready states.
 
 ## 1. Locate the bin directory
 
@@ -42,9 +47,9 @@ Apply the same per-worker steps as `/worktwin-ship`:
 - Pairwise real conflict detection with `git merge-tree --write-tree`
 - Pick the remote (prefer `origin`)
 - Check `gh` availability
-- Push each branch, then create or update its draft PR
+- Push each branch, then create or update its PR. New PRs are normal unless the `--draft` flag was set in step 0, in which case append `--draft` to `gh pr create`. Existing PRs are updated in place without touching their draft state.
 - Draft the PR title and body per worker by reading commits, diff, task, and repo conventions (`CONTRIBUTING.md`, last 20 base-branch commit messages). No fixed template. End the body with `Opened by worktwin.`
-- If `gh` is missing or unauthenticated, print manual commands and skip the PR step
+- If `gh` is missing or unauthenticated, print manual commands and skip the PR step. Include `--draft` in the printed command when the flag was set.
 
 ## 5. Cleanup after successful ship
 
