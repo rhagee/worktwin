@@ -1,7 +1,7 @@
 ---
 name: worktwin-clear
-description: Remove the state file for a stale worktwin worker (worktree gone but state lingers). Refuses to touch live workers. Use when /worktwin-status shows an entry as stale and you want it off the list.
-argument-hint: '<branch>'
+description: Mark a worktwin worker as complete and remove it from the active list. Removes the worktree directory (if present) and the parallel/ state file. Use after a manual ship via /worktwin-finalize, or to drop a stale entry whose worktree was already removed. Accepts --force to discard uncommitted changes.
+argument-hint: '[--force] <branch>'
 arguments: [branch]
 disable-model-invocation: true
 allowed-tools: Bash(bash *), Bash(test *), Bash(git *)
@@ -9,14 +9,21 @@ allowed-tools: Bash(bash *), Bash(test *), Bash(git *)
 
 # worktwin-clear
 
-Drop the state entry for a stale worker. The mechanical work runs in `bin/worktwin-clear`, which only acts when the worktree is genuinely missing from disk.
+Mark a worker as complete and drop it from `/worktwin-status`. Common case after a manual ship via `/worktwin-finalize`: the user pushed and opened the PR themselves, now they want worktwin to forget the local state.
 
-## 1. Require a branch argument
+The mechanical work runs in `bin/worktwin-clear`. Safe by default: the script refuses if the worktree has uncommitted changes. `--force` overrides.
 
-If `$branch` is empty, stop with:
+## 1. Parse arguments
+
+Walk `$@` and capture:
+
+- A boolean `FORCE` flag. Set true if `--force` appears.
+- The branch name (the first non-flag argument).
+
+If no branch was passed, stop with:
 
 ```
-worktwin-clear requires a branch. Use /worktwin-clear <branch>.
+worktwin-clear requires a branch. Use /worktwin-clear [--force] <branch>.
 ```
 
 ## 2. Locate the bin directory
@@ -33,14 +40,18 @@ done
 ## 3. Run the clear
 
 ```bash
-"$WORKTWIN_BIN/worktwin-clear" "$branch"
+if [ $FORCE -eq 1 ]; then
+  "$WORKTWIN_BIN/worktwin-clear" --force "$branch"
+else
+  "$WORKTWIN_BIN/worktwin-clear" "$branch"
+fi
 ```
 
 Surface the script's stdout and stderr to the user.
 
-- Exit code 0: state removed, tell the user the entry is gone.
-- Exit code 1 with "worktree still exists": explain that the user should ship, finalize, or `git worktree remove` first. Do not retry, do not force.
-- Exit code 1 with "no state file found": tell the user the branch is not a known worktwin worker.
+- Exit code 0: the entry is gone. Tell the user what was removed (worktree path, state file).
+- Exit code 1 with "uncommitted change(s)": the worker still has work in progress. Tell the user the options: commit, stash, or re-invoke as `/worktwin-clear --force <branch>` to discard. Do not auto-retry with --force; the safety prompt is the whole point.
+- Exit code 1 with "no state file found": the branch is not a known worktwin worker.
 
 ## 4. Recap
 

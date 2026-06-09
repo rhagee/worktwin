@@ -1,28 +1,47 @@
 #!/usr/bin/env bash
-# worktwin-clear - remove a stale worker's state file. Refuses to touch
-# state when the worktree still exists; the user should ship, finalize,
-# or 'git worktree remove' first in that case.
+# worktwin-clear - remove a worker's worktree directory and parallel/
+# state file. Used to mark a worker complete (after a manual ship via
+# /worktwin-finalize) or to drop a stale entry. Safe by default: the
+# command refuses if the worktree has uncommitted changes. --force
+# overrides.
 set -e
 
 usage() {
   cat <<'EOF'
-worktwin-clear <branch>
+worktwin-clear [--force] <branch>
 
-Removes the parallel/ state file for <branch> when the corresponding
-worktree no longer exists on disk. Use when /worktwin-status shows a
-worker as 'stale (worktree gone)' and you want it off the list.
+Removes the worktree directory (when present) and the parallel/ state
+file for <branch>. The branch itself is never deleted; if the branch
+was pushed and a PR is open, the work is safe on the remote.
 
-If the worktree still exists, the command refuses and tells you to
-clean it up first via /worktwin-ship, /worktwin-finalize, or
-'git worktree remove'.
+Default behaviour:
+  - If the worktree directory is missing (stale state), remove the
+    state file silently.
+  - If the worktree directory exists and the working tree is clean
+    (no uncommitted changes), run 'git worktree remove' and then
+    remove the state file.
+  - If the worktree has uncommitted changes, refuse and tell the
+    user to commit, stash, or pass --force.
 
-The branch itself is never deleted.
+With --force, the worktree is removed regardless of uncommitted state
+(git worktree remove --force) and the state file goes too. Uncommitted
+work is lost.
 EOF
 }
 
-if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then usage; exit 0; fi
+FORCE=0
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) usage; exit 0 ;;
+    --force) FORCE=1 ;;
+    *) ARGS+=("$arg") ;;
+  esac
+done
+set -- "${ARGS[@]}"
+
 if [ $# -lt 1 ]; then
-  echo "usage: worktwin-clear <branch>" >&2
+  echo "usage: worktwin-clear [--force] <branch>" >&2
   exit 2
 fi
 
@@ -55,14 +74,23 @@ fi
 WORKTREE=$(grep -m1 '"worktree":' "$STATE_FILE" | sed -E 's/.*"worktree":[[:space:]]*"([^"]*)".*/\1/')
 
 if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
-  echo "ERROR: worktree still exists at $WORKTREE" >&2
-  echo "Run /worktwin-ship $BRANCH or /worktwin-finalize $BRANCH first," >&2
-  echo "or 'git worktree remove $WORKTREE' to drop it manually." >&2
-  exit 1
+  # Check for uncommitted changes
+  UNCOMMITTED=$(git -C "$WORKTREE" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$UNCOMMITTED" -gt 0 ] && [ $FORCE -eq 0 ]; then
+    echo "ERROR: worktree at $WORKTREE has $UNCOMMITTED uncommitted change(s)" >&2
+    echo "Commit or stash them first, or pass --force to discard." >&2
+    exit 1
+  fi
+
+  if [ $FORCE -eq 1 ]; then
+    git worktree remove --force "$WORKTREE" 2>/dev/null || rm -rf "$WORKTREE"
+  else
+    git worktree remove "$WORKTREE"
+  fi
+  echo "removed worktree: $WORKTREE"
 fi
 
 rm "$STATE_FILE"
-echo "removed stale state: $STATE_FILE"
+echo "removed state: $STATE_FILE"
 
-# Also prune any orphaned worktree administrative records git may still hold
 git worktree prune 2>/dev/null || true

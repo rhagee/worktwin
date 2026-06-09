@@ -73,6 +73,12 @@ Pick the remote with `git remote | grep -x origin || git remote | head -n1`. If 
 
 Finalize must not remove worktrees, must not delete state files, must not push, must not call `gh`.
 
+After the user has run the printed commands themselves and the PR is open on GitHub, they mark the worker complete with `/worktwin-clear <branch>`. That removes the worktree and the state file so it stops appearing in `/worktwin-status`. Mention this in the final-table footer so users know the follow-up:
+
+```
+when each PR is open and you no longer need the worktree, run /worktwin-clear <branch> to mark it done
+```
+
 ## 7. Final table
 
 Recap every finalized worker:
