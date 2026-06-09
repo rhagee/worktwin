@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# worktwin-update - find the cloned worktwin repo via the recorded
+# .source path, pull it, and re-run the installer. Pluggable: works as
+# a CLI tool and from the worktwin-update skill.
+
+# Locate the .source file the installer wrote.
+SOURCE_FILE=""
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../.source" ]; then
+  SOURCE_FILE="$SCRIPT_DIR/../.source"
+fi
+if [ -z "$SOURCE_FILE" ] && [ -f "$HOME/.claude/skills/worktwin/.source" ]; then
+  SOURCE_FILE="$HOME/.claude/skills/worktwin/.source"
+fi
+if [ -z "$SOURCE_FILE" ]; then
+  REPO=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "$REPO" ] && [ -f "$REPO/.claude/skills/worktwin/.source" ]; then
+    SOURCE_FILE="$REPO/.claude/skills/worktwin/.source"
+  fi
+fi
+
+if [ -z "$SOURCE_FILE" ]; then
+  echo "worktwin source path is not recorded (no .source file)."
+  echo "Did you install via install.sh or install.ps1 from a cloned worktwin repo?"
+  exit 0
+fi
+
+# Read the path, strip a leading UTF-8 BOM, normalise backslashes,
+# drop any line endings.
+SOURCE_ROOT=$(cat "$SOURCE_FILE")
+SOURCE_ROOT="${SOURCE_ROOT#$'\xef\xbb\xbf'}"
+SOURCE_ROOT="${SOURCE_ROOT//\\//}"
+SOURCE_ROOT="${SOURCE_ROOT%$'\r'}"
+SOURCE_ROOT="${SOURCE_ROOT%$'\n'}"
+
+if [ ! -d "$SOURCE_ROOT" ]; then
+  echo "Recorded source path no longer exists: $SOURCE_ROOT"
+  echo "Re-run install.sh or install.ps1 from the current path of your cloned worktwin repo."
+  exit 0
+fi
+
+if [ ! -f "$SOURCE_ROOT/update.sh" ]; then
+  echo "update.sh not found at $SOURCE_ROOT. Pull the worktwin repo first or re-run install."
+  exit 0
+fi
+
+bash "$SOURCE_ROOT/update.sh"

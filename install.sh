@@ -38,7 +38,7 @@ if [ -d "$BIN_SRC" ]; then
   BIN_DST="$TARGET/worktwin/bin"
   mkdir -p "$BIN_DST"
   cp "$BIN_SRC"/* "$BIN_DST/"
-  chmod +x "$BIN_DST"/worktwin-init "$BIN_DST"/worktwin-claude-md "$BIN_DST"/worktwin-list "$BIN_DST"/worktwin-help 2>/dev/null || true
+  chmod +x "$BIN_DST"/worktwin-init "$BIN_DST"/worktwin-claude-md "$BIN_DST"/worktwin-list "$BIN_DST"/worktwin-help "$BIN_DST"/worktwin-update 2>/dev/null || true
 fi
 
 # Record where this clone lives so worktwin-update can find it later
