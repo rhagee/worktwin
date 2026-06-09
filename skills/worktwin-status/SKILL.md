@@ -43,8 +43,11 @@ Print one compact table:
 
 For workers where `worktree_exists` is `false`, replace the worktree column with `stale (worktree gone)` and the metric columns with `-`. Truncate the task column to a sensible width.
 
-Append a single hint line below the table:
+Append two hint lines below the table:
 
 ```
 run /worktwin-ship <branch> to ship one, /worktwin-ship-all for the batch, or /worktwin-finalize for a local-only summary
+run /worktwin-clear <branch> to drop a stale entry (worktree gone)
 ```
+
+If no workers are stale, you can skip the second hint.

@@ -9,6 +9,7 @@ Every script ships in two flavours that follow the same contract:
 | `worktwin-init` | `bin/worktwin-init` | `bin/worktwin-init.ps1` |
 | `worktwin-claude-md` | `bin/worktwin-claude-md` | `bin/worktwin-claude-md.ps1` |
 | `worktwin-list` | `bin/worktwin-list` | `bin/worktwin-list.ps1` |
+| `worktwin-clear` | `bin/worktwin-clear` | `bin/worktwin-clear.ps1` |
 
 After install they land at:
 
@@ -96,6 +97,22 @@ Each line:
 When the parallel directory is missing, exits silently with no output. Filtering by branch is silent when no matches are found, not an error.
 
 `jq` is recommended. The bash version falls back to a simpler parser when `jq` is missing, which is fine for ASCII-only task strings but can mishandle exotic characters. The PowerShell version uses the native `ConvertFrom-Json` and `ConvertTo-Json` with no fallback needed.
+
+## worktwin-clear
+
+Remove the state file for a stale worker (worktree gone, state lingers). Refuses to touch a worker whose worktree still exists; in that case use the ship or finalize flow, or `git worktree remove` manually.
+
+```
+worktwin-clear <branch>
+```
+
+No stdout on success beyond a one-line confirmation. Errors go to stderr.
+
+Exit codes:
+
+- `0` state file removed
+- `1` operational error (not a git repo, branch not known, worktree still present)
+- `2` usage error
 
 ## Composition example
 

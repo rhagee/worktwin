@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# worktwin-clear - remove a stale worker's state file. Refuses to touch
+# state when the worktree still exists; the user should ship, finalize,
+# or 'git worktree remove' first in that case.
+set -e
+
+usage() {
+  cat <<'EOF'
+worktwin-clear <branch>
+
+Removes the parallel/ state file for <branch> when the corresponding
+worktree no longer exists on disk. Use when /worktwin-status shows a
+worker as 'stale (worktree gone)' and you want it off the list.
+
+If the worktree still exists, the command refuses and tells you to
+clean it up first via /worktwin-ship, /worktwin-finalize, or
+'git worktree remove'.
+
+The branch itself is never deleted.
+EOF
+}
+
+if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then usage; exit 0; fi
+if [ $# -lt 1 ]; then
+  echo "usage: worktwin-clear <branch>" >&2
+  exit 2
+fi
+
+BRANCH="$1"
+
+GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null || true)
+if [ -z "$GIT_COMMON_DIR" ]; then
+  echo "ERROR: not inside a git repository" >&2
+  exit 1
+fi
+GIT_COMMON_DIR=$(cd "$GIT_COMMON_DIR" && pwd)
+PARALLEL_DIR="$GIT_COMMON_DIR/parallel"
+
+STATE_FILE=""
+if [ -d "$PARALLEL_DIR" ]; then
+  for f in "$PARALLEL_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    if grep -q "\"branch\":[[:space:]]*\"$BRANCH\"" "$f"; then
+      STATE_FILE="$f"
+      break
+    fi
+  done
+fi
+
+if [ -z "$STATE_FILE" ]; then
+  echo "ERROR: no state file found for branch '$BRANCH'" >&2
+  exit 1
+fi
+
+WORKTREE=$(grep -m1 '"worktree":' "$STATE_FILE" | sed -E 's/.*"worktree":[[:space:]]*"([^"]*)".*/\1/')
+
+if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
+  echo "ERROR: worktree still exists at $WORKTREE" >&2
+  echo "Run /worktwin-ship $BRANCH or /worktwin-finalize $BRANCH first," >&2
+  echo "or 'git worktree remove $WORKTREE' to drop it manually." >&2
+  exit 1
+fi
+
+rm "$STATE_FILE"
+echo "removed stale state: $STATE_FILE"
+
+# Also prune any orphaned worktree administrative records git may still hold
+git worktree prune 2>/dev/null || true

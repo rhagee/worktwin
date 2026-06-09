@@ -27,6 +27,7 @@ $Skills = @(
     "worktwin-ship-all",
     "worktwin-finalize",
     "worktwin-status",
+    "worktwin-clear",
     "worktwin-help",
     "worktwin-update"
 )
