@@ -31,6 +31,18 @@ if [ -z "$SKILLS_DIR" ]; then
   exit 0
 fi
 
+# When the output is captured (typical for the worktwin-help skill via bash
+# injection), wrap the body in a code fence so the markdown renderer
+# preserves angle brackets like <from-branch>. When called from a real
+# terminal, the fence is omitted for clean reading.
+if [ -t 1 ]; then
+  USE_FENCE=0
+else
+  USE_FENCE=1
+fi
+
+[ $USE_FENCE -eq 1 ] && printf '```\n'
+
 ORDER="worktwin worktwin-status worktwin-ship worktwin-ship-all worktwin-finalize worktwin-update worktwin-help"
 
 emit() {
@@ -38,7 +50,7 @@ emit() {
   [ -f "$file" ] || return
   local name hint desc short
   name=$(basename "$1")
-  hint=$(grep -m1 '^argument-hint:' "$file" | sed -e 's/^argument-hint: *//' -e 's/^"//' -e 's/"$//')
+  hint=$(grep -m1 '^argument-hint:' "$file" | sed -E -e 's/^argument-hint: *//' -e 's/^"(.*)"$/\1/')
   desc=$(grep -m1 '^description:' "$file" | sed 's/^description: *//')
   short=$(echo "$desc" | sed 's/\. [A-Z].*/./')
   if [ -n "$hint" ]; then
@@ -63,3 +75,5 @@ for dir in "$SKILLS_DIR"/worktwin*/; do
 done
 
 echo "docs: https://github.com/rhagee/worktwin"
+
+[ $USE_FENCE -eq 1 ] && printf '```\n'

@@ -26,6 +26,12 @@ if (-not $skillsDir) {
     exit 0
 }
 
+# When the output is captured (typical for the worktwin-help skill), wrap
+# the body in a code fence so the markdown renderer preserves angle
+# brackets. When called from a real terminal, the fence is omitted.
+$useFence = [Console]::IsOutputRedirected
+if ($useFence) { Write-Host '```' }
+
 $order = @(
     "worktwin",
     "worktwin-status",
@@ -44,7 +50,8 @@ function Emit-Skill($dir) {
     $hint = ""
     $desc = ""
     if ($content -match '(?m)^argument-hint:\s*(.+)$') {
-        $hint = $matches[1].Trim('"').Trim()
+        $raw = $matches[1].Trim()
+        if ($raw -match '^"(.*)"$') { $hint = $matches[1] } else { $hint = $raw }
     }
     if ($content -match '(?m)^description:\s*(.+)$') {
         $desc = $matches[1].Trim()
@@ -71,3 +78,5 @@ Get-ChildItem -Path $skillsDir -Directory -Filter "worktwin*" | ForEach-Object {
 }
 
 Write-Host "docs: https://github.com/rhagee/worktwin"
+
+if ($useFence) { Write-Host '```' }
