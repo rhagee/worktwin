@@ -47,10 +47,10 @@ Two terminals, same repository:
 
 ```
 # Terminal 1, Claude Code
-/worktwin feat/auth develop "implement Google OAuth login"
+/worktwin develop feat/auth "implement Google OAuth login"
 
 # Terminal 2, Claude Code, same repo
-/worktwin feat/payments develop "integrate Stripe checkout"
+/worktwin develop feat/payments "integrate Stripe checkout"
 ```
 
 Each agent is now bound to its own worktree and branch. The two sessions cannot see or step on each other.
@@ -80,10 +80,10 @@ The rules also survive `/compact` and any new Claude Code session opened in the 
 Four parallel features against two different base branches:
 
 ```
-/worktwin fix/login-crash release/1.4 "fix the crash on submit when the form is empty"
-/worktwin feat/dark-mode develop "ship dark mode behind a feature flag"
-/worktwin feat/csv-export develop "add CSV export to the reports page"
-/worktwin chore/upgrade-react develop "upgrade React to 19.1 and fix any breakage"
+/worktwin release/1.4 fix/login-crash "fix the crash on submit when the form is empty"
+/worktwin develop feat/dark-mode "ship dark mode behind a feature flag"
+/worktwin develop feat/csv-export "add CSV export to the reports page"
+/worktwin develop chore/upgrade-react "upgrade React to 19.1 and fix any breakage"
 ```
 
 Four worktrees on disk, four bound sessions, zero interference. `/worktwin-ship` at the end opens four draft PRs (or updates them if they already exist).

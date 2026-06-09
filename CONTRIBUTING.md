@@ -16,7 +16,7 @@ For feature requests, describe the workflow you want, not the implementation you
 ## Sending pull requests
 
 1. Fork the repo.
-2. Branch off `main` (and yes, you can use worktwin itself for the branch: `/worktwin feat/your-thing main "describe the change"`).
+2. Branch off `main` (and yes, you can use worktwin itself for the branch: `/worktwin main feat/your-thing "describe the change"`).
 3. Keep the change focused. One PR per logical unit.
 4. Conventional commit prefixes: `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`.
 5. Open the PR against `main`.

@@ -1,8 +1,8 @@
 ---
 name: worktwin
 description: Set up an isolated git worktree on a dedicated branch and bind this Claude Code session to it. Use when the user wants to spawn a parallel worker that will not interfere with other concurrent sessions on the same repo.
-argument-hint: <new-branch> <from-branch> "<task>"
-arguments: [new_branch, from_branch, task]
+argument-hint: <from-branch> <new-branch> "<task>"
+arguments: [from_branch, new_branch, task]
 disable-model-invocation: true
 allowed-tools: Bash(git *), Bash(mkdir *), Bash(ls *), Bash(pwd *), Bash(cat *), Bash(dirname *), Bash(basename *), Bash(date *), Bash(jq *), Bash(sed *), Read, Write, Edit
 ---

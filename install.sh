@@ -35,6 +35,6 @@ done
 echo "worktwin installed to $TARGET"
 echo
 echo "Commands available in Claude Code:"
-echo "  /worktwin <new-branch> <from-branch> \"<task>\""
+echo "  /worktwin <from-branch> <new-branch> \"<task>\""
 echo "  /worktwin-ship [branch1 branch2 ...]"
 echo "  /worktwin-status"

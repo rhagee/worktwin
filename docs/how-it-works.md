@@ -9,7 +9,7 @@ That solves filesystem isolation. It does not solve agent behaviour: nothing sto
 ## Lifecycle
 
 ```
-/worktwin feat/x main "do thing"
+/worktwin main feat/x "do thing"
    |
    v
 [main repo]----------------+
