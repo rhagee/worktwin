@@ -1,7 +1,7 @@
 ---
 name: worktwin-ship
 description: Push and open or update GitHub pull requests for one or more specific worktwin workers. Use when a subset of parallel workers are done and you want to ship them without touching the others. Requires at least one branch argument.
-argument-hint: <branch> [<branch> ...]
+argument-hint: '<branch> [<branch> ...]'
 arguments: [branches]
 disable-model-invocation: true
 allowed-tools: Bash(git *), Bash(gh *), Bash(ls *), Bash(test *), Bash(jq *), Bash(grep *), Read
