@@ -38,7 +38,9 @@ done
 
 Parse the NDJSON. For any branch passed that did not appear in the output, warn that no state file matches it. For each resolved worker, you have `from_branch`, `worktree`, `task`, `commits_ahead`, `files_changed`, `uncommitted` already computed.
 
-Skip any worker with `commits_ahead == 0` and tell the user.
+Skip any worker with `commits_ahead == 0` (silent skip with a one-line note in the final table).
+
+Do not ask the user how to handle uncommitted changes. Workers are expected to commit before they stop, and the `CLAUDE.md` rules block tells them so explicitly. If a worker still has uncommitted changes, note it in the final table with a `dirty` flag in the Status column and ship whatever is already committed on that branch. Do not commit on the worker's behalf, do not pause and ask the user; the user invoked this command to push and open PRs, do that.
 
 ## 4. Conflict detection between the shipped subset
 
@@ -70,9 +72,8 @@ gh --version >/dev/null 2>&1 && gh auth status >/dev/null 2>&1
 
 For each worker:
 
-1. Confirm the push with the user.
-2. `git push "$REMOTE" "<branch>"`.
-3. If `gh` is available:
+1. `git push "$REMOTE" "<branch>"`.
+2. If `gh` is available:
 
    ```bash
    PR_NUM=$(gh pr list --head "<branch>" --json number --jq '.[0].number // empty')
@@ -81,7 +82,7 @@ For each worker:
    - Empty: open a new draft PR with `gh pr create --base "<from_branch>" --head "<branch>" --title "<title>" --body "<body>" --draft`.
    - Set: update with `gh pr edit "$PR_NUM" --title "<title>" --body "<body>"`. Optionally add a short comment summarising new commits.
 
-4. If `gh` is missing or unauthenticated, print the manual `git push` and `gh pr create` commands for the user and skip the PR step for that branch.
+3. If `gh` is missing or unauthenticated, print the manual `git push` and `gh pr create` commands for the user and skip the PR step for that branch.
 
 ## 6. Draft the PR title and body
 
@@ -115,7 +116,9 @@ Do not auto-delete the branch.
 Recap only the shipped subset:
 
 ```
-| Branch | Base | Commits | Files | PR | Conflict |
+| Branch | Base | Commits | Files | PR | Conflict | Status |
 ```
 
-PR column shows the PR number or `manual`. Conflict column shows `clean`, `files overlap`, or `blocking`.
+- PR: PR number, or `manual` if `gh` was not used, or `skipped (no commits)` for workers with nothing ahead.
+- Conflict: `clean`, `files overlap`, or `blocking`.
+- Status: `clean` when the working tree was empty, or `dirty (N uncommitted)` when the worker left a non-empty working tree behind. Dirty is reportable, not blocking; the committed work shipped, the uncommitted tail did not.

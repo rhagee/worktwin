@@ -40,6 +40,11 @@ DO
 - Stay on branch ``$Branch`` for the entire session.
 - Make atomic commits with messages like ``feat(scope): description``.
 - After each meaningful unit of work, commit.
+- Before you stop or hand control back to the user, commit every
+  modification. The work is "done" only when ``git status --porcelain``
+  is empty and your progress is reflected in commits ahead of
+  ``$FromBranch``. The ship and finalize commands assume your branch
+  is clean; never leave a dirty working tree behind.
 - If the user asks you to continue or iterate, keep working on the same branch.
 
 DO NOT

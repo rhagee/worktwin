@@ -28,15 +28,17 @@ done
 
 If the output is empty, print `no active worktwin workers, nothing to ship` and stop.
 
-## 3. Confirm scope
+## 3. Ship without asking
 
-List the discovered workers and ask the user to confirm shipping the full set. If they want a subset, tell them to use `/worktwin-ship <branch>` instead.
+The user invoked `/worktwin-ship-all` deliberately. Do not ask them to confirm the scope, do not ask them to pick a subset, do not ask them what to do about uncommitted changes. Workers are responsible for committing before they hand control back, and the `CLAUDE.md` rules block makes that explicit. If a worker still has uncommitted changes when ship-all runs, note it in the final table with a `dirty` flag in the Status column and ship whatever is already committed on that branch. Do not try to commit on the worker's behalf.
 
-## 4. Follow the ship workflow
+Print one short line announcing what you are about to do (e.g. `shipping 3 workers ...`) and proceed straight to step 4.
+
+## 4. Per-worker work
 
 Apply the same per-worker steps as `/worktwin-ship`:
 
-- Skip workers with `commits_ahead == 0`
+- Skip workers with `commits_ahead == 0` (silent skip with a one-line note in the final table)
 - Pairwise real conflict detection with `git merge-tree --write-tree`
 - Pick the remote (prefer `origin`)
 - Check `gh` availability
@@ -46,7 +48,7 @@ Apply the same per-worker steps as `/worktwin-ship`:
 
 ## 5. Optional cleanup
 
-Ask once at the end whether to clean up every shipped worker, or do it per-worker if the user prefers:
+After PRs are open or updated, ask once at the end whether to clean up every shipped worker:
 
 ```bash
 git worktree remove "<worktree>"
@@ -60,7 +62,9 @@ Do not auto-delete branches.
 Recap every shipped worker:
 
 ```
-| Branch | Base | Commits | Files | PR | Conflict |
+| Branch | Base | Commits | Files | PR | Conflict | Status |
 ```
 
-PR column shows the PR number or `manual`. Conflict column shows `clean`, `files overlap`, or `blocking`.
+- PR: PR number, or `manual` if `gh` was not used, or `skipped (no commits)` for workers with nothing ahead.
+- Conflict: `clean`, `files overlap`, or `blocking`.
+- Status: `clean` when the working tree was empty, or `dirty (N uncommitted)` when the worker left a non-empty working tree behind. Dirty is reportable, not blocking; the committed work shipped, the uncommitted tail did not.
