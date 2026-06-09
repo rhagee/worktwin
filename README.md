@@ -1,8 +1,9 @@
 # worktwin
 
 > Spawn isolated Claude Code agents on parallel branches. No conflicts, no chaos.
+> Light mode: 0 disk overhead on APFS, btrfs, XFS, and Windows ReFS.
 
-worktwin is a Claude Code skill, not a CLI tool. Install it once, invoke it inside Claude Code with `/worktwin`, and the agent configures itself to work on a dedicated branch in an isolated git worktree. Multiple sessions on the same repo, zero context bleed.
+worktwin is a Claude Code skill, not a CLI tool. Install it once, invoke it inside Claude Code with `/worktwin`, and the agent configures itself to work on a dedicated branch in an isolated git worktree. Multiple sessions on the same repo, zero context bleed, and on capable filesystems each parallel worker adds near-zero bytes to disk.
 
 <!-- TODO: replace with demo GIF -->
 ![demo](docs/demo.gif)
@@ -10,6 +11,8 @@ worktwin is a Claude Code skill, not a CLI tool. Install it once, invoke it insi
 ## The problem
 
 Two Claude Code sessions, same repo, same file: chaos. Plain git worktrees give you filesystem isolation but do not tell the agent how to behave. The agent still wanders, switches branches, edits files in the other worktree, and your parallel work collapses into one tangled history.
+
+And the disk bill: every standard worktree is a full working copy. Four parallel agents on a 70 GB monorepo eat 280 GB of duplicated files just to keep them apart.
 
 ## What worktwin does differently
 
@@ -21,6 +24,25 @@ Two Claude Code sessions, same repo, same file: chaos. Plain git worktrees give 
 | Real conflict detection (not just file overlap) | no | no | yes |
 | Pushes branches and opens or updates PRs | no | no | yes |
 | Iterates in the same chat | no | no | yes |
+| 0 disk overhead per worker (light mode) | no | no | yes |
+
+## Light mode: 0-overhead worktrees
+
+On filesystems that support copy-on-write file cloning, worktwin spawns each worker as a CoW clone instead of a full file copy. A 70 GB monorepo with five parallel agents costs around 70 GB total on disk, not 350. Each worker only takes the space its own modifications introduce.
+
+| OS | Filesystem | Supported |
+|---|---|---|
+| macOS | APFS | yes, default since High Sierra |
+| Linux | btrfs | yes |
+| Linux | XFS | yes when mounted with `reflink=1` (default on modern kernels) |
+| Linux | ZFS | yes with `block_cloning` (OpenZFS 2.2+, kernel 5.3+) |
+| Linux | ext4 | no, switch to btrfs or XFS |
+| Windows | ReFS Dev Drive | yes, Windows 11 22H2+ |
+| Windows | NTFS | no, create a Dev Drive (see below) |
+
+Run `/worktwin-light-doctor` inside Claude Code to find out where your machine sits. On Windows without a Dev Drive, `/worktwin-light-setup-windows` walks you through creating one (admin required, ~100 GB recommended).
+
+Light mode is automatic. `/worktwin` picks it whenever the filesystem allows, falls back silently to standard worktrees otherwise. The output JSON reports which path was used. Full details in [docs/light-mode.md](docs/light-mode.md).
 
 ## Requirements
 
@@ -72,6 +94,8 @@ If you prefer bash, `install.sh` still works from Git Bash or WSL.
 ---
 
 Once installed, run `/worktwin-help` inside Claude Code at any time for the full list of commands, arguments, and short descriptions. The list is generated from the installed skills, so it always matches what is actually on your machine.
+
+To check if your machine can run light mode, run `/worktwin-light-doctor`. It will detect your filesystem and tell you what to do next.
 
 ### Updating
 
@@ -149,7 +173,7 @@ When the other three are also done, batch them out:
 
 Short version: `git worktree` for filesystem isolation, a state file in the shared `.git` directory for cross-worktree discovery, and a marked block in the worktree's `CLAUDE.md` so the rules persist across `/compact` and new sessions. The mechanical work runs through scripts in `bin/` so it is deterministic and testable; the skills are thin orchestrators that let the agent handle the judgement parts (drafting PRs, deciding on warnings).
 
-Full breakdown in [docs/how-it-works.md](docs/how-it-works.md). Comparison with other tools in [docs/vs-other-tools.md](docs/vs-other-tools.md). The `bin/` script contract in [docs/scripts.md](docs/scripts.md). Common issues in [docs/troubleshooting.md](docs/troubleshooting.md).
+Full breakdown in [docs/how-it-works.md](docs/how-it-works.md). Light mode details and OS-specific setup in [docs/light-mode.md](docs/light-mode.md). Comparison with other tools in [docs/vs-other-tools.md](docs/vs-other-tools.md). The `bin/` script contract in [docs/scripts.md](docs/scripts.md). Common issues in [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Standalone CLI
 
