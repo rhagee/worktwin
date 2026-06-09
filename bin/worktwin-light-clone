@@ -38,16 +38,23 @@ DST="$2"
 OS=$(uname -s)
 case "$OS" in
   Darwin)
+    # -RPc: preserve symlinks (-P), recurse (-R), clone via APFS (-c).
+    # Without -P, cp would follow symlinks and turn tracked symlinks into
+    # regular files. The post-clone 'git checkout' step in worktwin-init
+    # would then have to rewrite them, defeating the purpose.
     for entry in "$SRC"/* "$SRC"/.[!.]*; do
-      [ -e "$entry" ] || continue
+      [ -e "$entry" ] || [ -L "$entry" ] || continue
       name=$(basename "$entry")
       [ "$name" = ".git" ] && continue
-      cp -c -R "$entry" "$DST/"
+      cp -RPc "$entry" "$DST/"
     done
     ;;
   Linux)
+    # cp -a preserves symlinks, ownership, and timestamps. --reflink=auto
+    # uses CoW where the filesystem supports it and falls back to regular
+    # copy otherwise.
     for entry in "$SRC"/* "$SRC"/.[!.]*; do
-      [ -e "$entry" ] || continue
+      [ -e "$entry" ] || [ -L "$entry" ] || continue
       name=$(basename "$entry")
       [ "$name" = ".git" ] && continue
       cp -a --reflink=auto "$entry" "$DST/"

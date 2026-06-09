@@ -187,6 +187,14 @@ worktwin-claude-md /path/to/worktree feat/auth develop "the task"
 
 Full contract and usage in [docs/scripts.md](docs/scripts.md).
 
+## Related work
+
+worktwin is not the first CoW worktree tool and not the first AI-agent worktree orchestrator. It is the intersection: a Claude Code skill that uses CoW where the filesystem allows, persists the agent rules through `CLAUDE.md`, coordinates ship and clear, and automates Windows Dev Drive setup for users without one. The four-step pattern in `--light` mode (worktree add `--no-checkout`, CoW-clone, `git checkout` to anchor) is exactly what [josharian/git-cow-worktree](https://github.com/josharian/git-cow-worktree) and the [commaok.xyz design note](https://commaok.xyz/post/git-cow-worktrees/) describe, and we credit them.
+
+Other tools in the space: [joeinnes/cow](https://github.com/joeinnes/cow) (Rust + Swift workspace manager with MCP), [anomalyco/rift](https://github.com/anomalyco/rift) (APFS clonefile), [bkildow/wt-cli](https://github.com/bkildow/wt-cli) (CoW worktree CLI). Anthropic's native [`claude --worktree`](https://code.claude.com/docs/en/worktrees) (Feb 2026) creates worktrees from the Claude Code CLI but does not configure the agent or coordinate the ship lifecycle. A wider 2026 ecosystem of AI-agent worktree orchestrators (Conductor, Vibe Kanban, Claude Squad, Cline, Cursor, Windsurf) is surveyed in [Nimbalyst's comparison](https://nimbalyst.com/blog/best-git-worktree-tools-ai-coding-2026/).
+
+Full credits and links in [docs/related-work.md](docs/related-work.md).
+
 ## Contributing
 
 Issues and pull requests welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).

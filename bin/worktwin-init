@@ -182,7 +182,15 @@ else
       git worktree add --no-checkout -b "$NEW_BRANCH" "$WORKTREE_PATH" "$FROM_REF" >/dev/null
     fi
     "$LIGHT_CLONE" "$CLONE_SOURCE" "$WORKTREE_PATH"
-    git -C "$WORKTREE_PATH" read-tree --reset HEAD
+    # git checkout re-anchors the working tree to HEAD. Files cloned via
+    # CoW that already match HEAD are left untouched (no rewrite, CoW
+    # preserved). Anything that drifted - symlinks copied as plain files
+    # on filesystems where cp does not preserve them, mode mismatches,
+    # missing entries - is restored by git from the object store. This is
+    # the same belt-and-suspenders pattern used by git-cow-worktree and
+    # the commaok.xyz design note.
+    git -C "$WORKTREE_PATH" checkout HEAD -- . 2>/dev/null || \
+      git -C "$WORKTREE_PATH" read-tree --reset HEAD
   else
     if git rev-parse --verify "$NEW_BRANCH" >/dev/null 2>&1; then
       git worktree add "$WORKTREE_PATH" "$NEW_BRANCH" >/dev/null
