@@ -56,9 +56,12 @@ if (Test-Path $BinSrc) {
     Copy-Item -Path (Join-Path $BinSrc "*") -Destination $BinDst -Recurse -Force
 }
 
-# Record where this clone lives so worktwin-update can find it later
+# Record where this clone lives so worktwin-update can find it later.
+# Forward slashes so the path is consumable by both PowerShell and bash
+# (Git Bash on Windows does not understand backslash paths in test -d).
 $SourceFile = Join-Path $Target "worktwin\.source"
-Set-Content -Path $SourceFile -Value $PSScriptRoot -Encoding utf8
+$NormalisedPath = $PSScriptRoot -replace '\\', '/'
+Set-Content -Path $SourceFile -Value $NormalisedPath -Encoding utf8 -NoNewline
 
 Write-Host "worktwin installed to $Target"
 Write-Host ""
