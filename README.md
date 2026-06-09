@@ -40,7 +40,7 @@ On filesystems that support copy-on-write file cloning, worktwin spawns each wor
 | Windows | ReFS Dev Drive | yes, Windows 11 22H2+ |
 | Windows | NTFS | no, create a Dev Drive (see below) |
 
-Run `/worktwin-light-doctor` inside Claude Code to find out where your machine sits. On Windows without a Dev Drive, `/worktwin-light-setup-windows` walks you through creating one (admin required, ~100 GB recommended).
+Run `/worktwin-light-doctor` inside Claude Code to find out where your machine sits. On Windows without a Dev Drive, `/worktwin-light-setup-windows` walks you through creating one (admin required, ~100 GB recommended). The Windows Dev Drive path is validated live on Windows 11 25H2 with a 200 GB ReFS volume.
 
 Light mode is automatic. `/worktwin` picks it whenever the filesystem allows, falls back silently to standard worktrees otherwise. If you ever need to override, tell the agent to "force light" or "force heavy" and the skill will pass `--force-light` or `--force-heavy` to `worktwin-init`. The output JSON reports which path was used. Full details in [docs/light-mode.md](docs/light-mode.md).
 

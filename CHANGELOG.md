@@ -21,10 +21,11 @@ Initial public release.
 0-overhead worktrees via filesystem copy-on-write file cloning. On capable filesystems, a new worker starts with near-zero disk overhead and grows only as the agent writes to it.
 
 - macOS APFS: `cp -c` (clonefile) - validated live on Apple Silicon
+- Windows 11 Dev Drive (ReFS): `Copy-Item` triggers Block Cloning automatically - validated live on Windows 11 25H2
+- Windows NTFS: graceful fallback to standard `git worktree add` - validated live
 - Linux btrfs: `cp -a --reflink=auto`
 - Linux XFS with reflink: same, with runtime reflink probe
 - Linux ZFS with block_cloning: gated by reflink probe
-- Windows 11 Dev Drive (ReFS): `Copy-Item` triggers Block Cloning automatically
 - Anywhere else: falls back silently to a standard `git worktree add`
 
 Configuration of cross-volume light bases via `bin/worktwin-light-base` so Windows users with the main repo on NTFS and a Dev Drive at `D:\` can still get the storage win.
@@ -57,4 +58,3 @@ Bats coverage for the deterministic `bin/` scripts: spawn, state file, idempoten
 ### Known gaps
 
 - Linux btrfs/XFS/ZFS light mode is code-complete but not yet validated against real hardware in v1.0. Community testers welcome. The detection script probes reflink support at runtime, so a misconfigured XFS volume reports clearly instead of silently failing.
-- Windows ReFS Block Cloning is code-complete; live validation pending a Dev Drive on the developer's machine.
