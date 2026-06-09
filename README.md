@@ -42,7 +42,7 @@ On filesystems that support copy-on-write file cloning, worktwin spawns each wor
 
 Run `/worktwin-light-doctor` inside Claude Code to find out where your machine sits. On Windows without a Dev Drive, `/worktwin-light-setup-windows` walks you through creating one (admin required, ~100 GB recommended).
 
-Light mode is automatic. `/worktwin` picks it whenever the filesystem allows, falls back silently to standard worktrees otherwise. The output JSON reports which path was used. Full details in [docs/light-mode.md](docs/light-mode.md).
+Light mode is automatic. `/worktwin` picks it whenever the filesystem allows, falls back silently to standard worktrees otherwise. If you ever need to override, tell the agent to "force light" or "force heavy" and the skill will pass `--force-light` or `--force-heavy` to `worktwin-init`. The output JSON reports which path was used. Full details in [docs/light-mode.md](docs/light-mode.md).
 
 ## Requirements
 

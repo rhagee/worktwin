@@ -29,15 +29,30 @@ fi
 
 ## 2. Atomic spawn
 
+Default invocation, which automatically picks light mode (0-overhead worktrees via filesystem copy-on-write) when the filesystem supports it and falls back to a standard worktree otherwise:
+
 ```bash
 "$WORKTWIN_BIN/worktwin-init" "$from_branch" "$new_branch" "$task"
 ```
+
+If the user explicitly asks for one mode or the other, pass the matching flag instead:
+
+- User says "force light", "must be light", "I need 0-overhead", or similar:
+  `"$WORKTWIN_BIN/worktwin-init" --force-light "$from_branch" "$new_branch" "$task"`
+  The script errors out if the filesystem does not support CoW. Surface that error to the user.
+- User says "no light mode", "use a full copy", "force heavy", or similar:
+  `"$WORKTWIN_BIN/worktwin-init" --force-heavy "$from_branch" "$new_branch" "$task"`
+  Always uses standard `git worktree add`, never tries CoW.
+
+Without an explicit instruction from the user, always use the default (no flag).
 
 The script prints a JSON object on stdout. Capture it and read these fields (use `jq` if available, otherwise parse manually):
 
 - `worktree`
 - `state_file`
 - `from_ref`
+- `light_mode` (`active` or `off`)
+- `light_reason` (one-line explanation)
 - `warnings` (array)
 
 If the script exits non-zero, show its stderr to the user and stop.
@@ -58,6 +73,7 @@ Print to the user:
 - Active branch and source branch
 - Task
 - State file path
+- Light mode (`active` or `off`) with the reason
 - Any `warnings` from step 2
 - Note: any Claude Code session opened in the worktree directory will pick up the rules automatically from CLAUDE.md.
 

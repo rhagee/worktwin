@@ -18,10 +18,10 @@ Light mode flags:
   --light=auto    (default) Use light mode if filesystem supports CoW
                   and the worktree is feasible. Else fall back silently
                   to a standard git worktree add.
-  --light=on      Require light mode. Error out if not possible.
-  --light=off     Skip light mode entirely.
-  --no-light      Alias for --light=off.
-  --light         Alias for --light=on.
+  --force-light   Require light mode. Error out if not possible.
+                  Aliases: --light, --light=on.
+  --force-heavy   Skip light mode entirely, always use full copy.
+                  Aliases: --no-light, --light=off.
 
 Prints a JSON object on stdout with the calculated paths, references,
 chosen light mode, and any warnings.
@@ -36,9 +36,9 @@ ARGS=()
 for arg in "$@"; do
   case "$arg" in
     -h|--help) usage; exit 0 ;;
-    --light=*) LIGHT_MODE="${arg#--light=}" ;;
-    --light)   LIGHT_MODE="on" ;;
-    --no-light) LIGHT_MODE="off" ;;
+    --light=*)              LIGHT_MODE="${arg#--light=}" ;;
+    --light|--force-light)  LIGHT_MODE="on" ;;
+    --no-light|--force-heavy) LIGHT_MODE="off" ;;
     *) ARGS+=("$arg") ;;
   esac
 done

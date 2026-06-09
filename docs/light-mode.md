@@ -104,7 +104,13 @@ worktwin-light-base remove <main>        drop a mapping
 worktwin-light-clone <src> <dst>         CoW copy, skips .git
 ```
 
-`worktwin-init` accepts `--light=auto|on|off`. Default is `auto`, which uses light when possible and falls back silently.
+`worktwin-init` accepts a light-mode flag. The defaults are sensible, but the flag is there when you want to be explicit:
+
+- (no flag, default): try light, fall back to heavy silently. Same as `--light=auto`.
+- `--force-light` (alias: `--light`, `--light=on`): require light, exit non-zero if the filesystem does not support it.
+- `--force-heavy` (alias: `--no-light`, `--light=off`): always use standard `git worktree add`, never attempt CoW.
+
+Inside Claude Code, ask the agent to "force light" or "force heavy" and the `/worktwin` skill will pass the matching flag. Without an explicit instruction it always uses the default (light when possible).
 
 ## Platform status
 
