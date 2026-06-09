@@ -23,10 +23,9 @@ That solves filesystem isolation. It does not solve agent behaviour: nothing sto
 
 iterate in chat -> commits land on feat/x
 
-/worktwin-ship
-   |
-   v
-git push + gh pr create or update for every active worker
+ship one:   /worktwin-ship feat/x         -> git push + gh pr for feat/x
+ship many:  /worktwin-ship-all            -> git push + gh pr for every worker
+local only: /worktwin-finalize [<branch>] -> report + draft, no network
    |
    v
 optional cleanup: git worktree remove, remove state file
@@ -36,7 +35,7 @@ optional cleanup: git worktree remove, remove state file
 
 Path: `$(git rev-parse --git-common-dir)/parallel/<branch-slug>.json`.
 
-`--git-common-dir` always points at the main repo's `.git` directory, even when called from inside a worktree (where `.git` is a redirect file). Using it guarantees every worker writes to the same place and `/worktwin-ship` can discover all of them from any worktree.
+`--git-common-dir` always points at the main repo's `.git` directory, even when called from inside a worktree (where `.git` is a redirect file). Using it guarantees every worker writes to the same place and the ship and finalize commands can discover them from any worktree.
 
 The slug is derived from the branch name by replacing every character outside `[a-zA-Z0-9._-]` with a dash. The branch itself is not renamed.
 
@@ -73,7 +72,7 @@ If the worktree already has a `CLAUDE.md`, worktwin only touches the marked bloc
 
 ## Conflict detection
 
-`/worktwin-ship` uses a two-level model:
+`/worktwin-ship` and `/worktwin-ship-all` use a two-level model:
 
 1. File-level overlap (`comm` on the two file lists). A weak signal: two branches editing different parts of the same file are not in conflict. Shown as informational.
 2. Real conflicts from `git merge-tree --write-tree --merge-base=<base> <a> <b>`. If the output contains `<<<<<<<`, the merge would actually conflict. Shown as blocking.

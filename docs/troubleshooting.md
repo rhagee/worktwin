@@ -10,19 +10,23 @@ Open `CLAUDE.md` in the worktree root. The `<!-- BEGIN worktwin --> ... <!-- END
 
 If the block is there but the agent still drifts, mention the rules explicitly in your next message. The agent reads `CLAUDE.md` on every new turn but conversations carry weight too.
 
-## `/worktwin-ship` reports no workers
+## `/worktwin-ship` says it needs a branch argument
+
+By design. `/worktwin-ship` ships specific workers, never all of them, to prevent accidental batch-ship when only one worker is done. Pass the branches you want: `/worktwin-ship feat/auth` or `/worktwin-ship feat/auth feat/payments`. If you genuinely want every active worker, use `/worktwin-ship-all`.
+
+## Ship or finalize reports no workers
 
 State files live in `$(git rev-parse --git-common-dir)/parallel/`, not in `.git/parallel/`. The two are different when you call them from inside a worktree. If a worker is missing, check that path and look for the expected `*.json` file.
 
-If the directory is empty but you know there are worktrees, fall back to `git worktree list` to find them and pass the branch names explicitly: `/worktwin-ship feat/auth feat/payments`.
+If the directory is empty but you know there are worktrees, fall back to `git worktree list` to find them and pass the branch names explicitly to `/worktwin-ship` or `/worktwin-finalize`.
 
 ## `gh` is not authenticated
 
-Run `gh auth login` once, then retry `/worktwin-ship`. Until then, worktwin will print the manual `git push` and `gh pr create` commands for you to run yourself.
+Run `gh auth login` once, then retry the ship command. Until then, ship will print the manual `git push` and `gh pr create` commands for you to run yourself. If you prefer to keep `gh` out of the loop entirely, use `/worktwin-finalize`: it never calls `gh` and gives you the same draft PR title and body to use however you want.
 
 ## PR already exists
 
-`/worktwin-ship` checks for an existing PR with `gh pr list --head <branch>` and updates it with `gh pr edit` instead of failing. If you see a duplicate-PR error, your `gh` CLI may be too old. Upgrade to a recent version.
+`/worktwin-ship` and `/worktwin-ship-all` both check for an existing PR with `gh pr list --head <branch>` and update it with `gh pr edit` instead of failing. If you see a duplicate-PR error, your `gh` CLI may be too old. Upgrade to a recent version.
 
 ## Source branch not found
 

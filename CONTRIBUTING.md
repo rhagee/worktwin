@@ -28,7 +28,7 @@ There is no automated test suite yet (a real one would need a sandbox git repo a
 1. Create a throwaway git repo somewhere.
 2. Install worktwin with `./install.sh local` inside that repo.
 3. Run the commands by hand and verify the side effects: worktree appears, state file lives at `$(git rev-parse --git-common-dir)/parallel/`, the worktree's `CLAUDE.md` contains the marked block.
-4. For `/worktwin-ship`, point the repo at a private test repo on GitHub so you can confirm the PR creation and update paths without polluting anything real.
+4. For the ship commands, point the repo at a private test repo on GitHub so you can confirm the push, PR creation, and PR update paths without polluting anything real. Use `/worktwin-finalize` if you want to test the reporting and drafting paths without any network calls.
 
 ## Constraints worth respecting
 

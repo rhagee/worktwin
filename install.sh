@@ -27,7 +27,7 @@ if [ ! -d "$SRC" ]; then
 fi
 
 mkdir -p "$TARGET"
-for skill in worktwin worktwin-ship worktwin-status; do
+for skill in worktwin worktwin-ship worktwin-ship-all worktwin-finalize worktwin-status; do
   rm -rf "$TARGET/$skill"
   cp -r "$SRC/$skill" "$TARGET/"
 done
@@ -36,5 +36,7 @@ echo "worktwin installed to $TARGET"
 echo
 echo "Commands available in Claude Code:"
 echo "  /worktwin <from-branch> <new-branch> \"<task>\""
-echo "  /worktwin-ship [branch1 branch2 ...]"
 echo "  /worktwin-status"
+echo "  /worktwin-ship <branch> [<branch> ...]"
+echo "  /worktwin-ship-all"
+echo "  /worktwin-finalize [<branch> ...]"

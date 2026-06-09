@@ -41,4 +41,4 @@ Print one compact table:
 | Branch | Base | Worktree | Commits | Files | Uncommitted | Task |
 ```
 
-Truncate the task column to a sensible width. Append a single hint line below: `run /worktwin-ship to push branches and open pull requests`.
+Truncate the task column to a sensible width. Append a single hint line below: `run /worktwin-ship <branch> to ship one, /worktwin-ship-all for the batch, or /worktwin-finalize for a local-only summary`.

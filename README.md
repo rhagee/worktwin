@@ -55,23 +55,32 @@ Two terminals, same repository:
 
 Each agent is now bound to its own worktree and branch. The two sessions cannot see or step on each other.
 
-When you are done in any session:
-
-```
-/worktwin-ship
-```
-
-This collects every active worker, pushes the branches, and opens two draft pull requests against `develop`. Existing PRs are updated, not duplicated.
-
-For a quick read-only overview:
+To see who is doing what at any point:
 
 ```
 /worktwin-status
 ```
 
+## Shipping
+
+Three ways to wrap up, depending on what you want and what your workflow allows:
+
+```
+/worktwin-ship feat/auth                  # ship one specific worker
+/worktwin-ship feat/auth feat/payments    # ship a specific subset
+/worktwin-ship-all                        # ship every active worker
+/worktwin-finalize [<branch> ...]         # local only, no push, no PR
+```
+
+`worktwin-ship` and `worktwin-ship-all` push the branches and open or update draft pull requests through `gh`. The agent reads the actual commits and diff and drafts a real PR title and body, matching the conventions it observes in the repo. No fixed template.
+
+`worktwin-ship` requires at least one branch argument on purpose, so a stray invocation never ships eight half-finished branches at once. Use `worktwin-ship-all` when you genuinely want the batch.
+
+`worktwin-finalize` does the same reporting job without the network: it shows what each worker did and prints the exact `git push` and `gh pr create` commands for you to run yourself when ready. Use it when `gh` is not available, when company policy forbids auto-PRs, or when you want to review locally before anything leaves your machine.
+
 ## Iterating in the same chat
 
-After `/worktwin`, the session is configured. Keep sending follow-up messages in the same chat: the agent stays on the same branch, commits as it goes, and the next `/worktwin-ship` updates the existing PR instead of opening a new one.
+After `/worktwin`, the session is configured. Keep sending follow-up messages in the same chat: the agent stays on the same branch, commits as it goes, and the next ship call updates the existing PR instead of opening a duplicate.
 
 The rules also survive `/compact` and any new Claude Code session opened in the worktree, because worktwin writes them into the worktree's `CLAUDE.md` in a clearly marked block. Existing `CLAUDE.md` content is preserved.
 
@@ -86,7 +95,17 @@ Four parallel features against two different base branches:
 /worktwin develop chore/upgrade-react "upgrade React to 19.1 and fix any breakage"
 ```
 
-Four worktrees on disk, four bound sessions, zero interference. `/worktwin-ship` at the end opens four draft PRs (or updates them if they already exist).
+Four worktrees on disk, four bound sessions, zero interference. When the hotfix is done first, ship it alone:
+
+```
+/worktwin-ship fix/login-crash
+```
+
+When the other three are also done, batch them out:
+
+```
+/worktwin-ship-all
+```
 
 ## How it works
 
