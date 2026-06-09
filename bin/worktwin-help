@@ -50,7 +50,7 @@ emit() {
   [ -f "$file" ] || return
   local name hint desc short
   name=$(basename "$1")
-  hint=$(grep -m1 '^argument-hint:' "$file" | sed -E -e 's/^argument-hint: *//' -e 's/^"(.*)"$/\1/')
+  hint=$(grep -m1 '^argument-hint:' "$file" | sed -E -e 's/^argument-hint: *//' -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'$/\\1/")
   desc=$(grep -m1 '^description:' "$file" | sed 's/^description: *//')
   short=$(echo "$desc" | sed 's/\. [A-Z].*/./')
   if [ -n "$hint" ]; then

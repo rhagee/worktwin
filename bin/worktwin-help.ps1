@@ -52,7 +52,9 @@ function Emit-Skill($dir) {
     $desc = ""
     if ($content -match '(?m)^argument-hint:\s*(.+)$') {
         $raw = $matches[1].Trim()
-        if ($raw -match '^"(.*)"$') { $hint = $matches[1] } else { $hint = $raw }
+        if ($raw -match '^"(.*)"$') { $hint = $matches[1] }
+        elseif ($raw -match "^'(.*)'$") { $hint = $matches[1] }
+        else { $hint = $raw }
     }
     if ($content -match '(?m)^description:\s*(.+)$') {
         $desc = $matches[1].Trim()
