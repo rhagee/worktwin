@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# worktwin-light-clone - copy the top-level entries of a directory
+# into another directory using filesystem copy-on-write where the
+# filesystem supports it. Skips .git so the caller can manage git
+# plumbing separately. Same-volume only: cross-volume CoW does not
+# exist on any current filesystem.
+set -e
+
+usage() {
+  cat <<'EOF'
+worktwin-light-clone <src> <dst>
+
+Copies every top-level entry inside <src> into <dst>, excluding .git.
+Uses the platform-native CoW mechanism:
+  - macOS APFS:        cp -c (clonefile)
+  - Linux btrfs/XFS:   cp -a --reflink=auto
+  - Windows ReFS:      delegates to the PowerShell mirror, which
+                       uses Copy-Item (Block Cloning kicks in
+                       automatically when both paths are on ReFS)
+
+Errors out if the OS is unsupported or if the source or destination
+directory does not exist.
+EOF
+}
+
+if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then usage; exit 0; fi
+if [ $# -ne 2 ]; then
+  echo "usage: worktwin-light-clone <src> <dst>" >&2
+  exit 2
+fi
+
+SRC="$1"
+DST="$2"
+
+[ -d "$SRC" ] || { echo "ERROR: source does not exist: $SRC" >&2; exit 1; }
+[ -d "$DST" ] || { echo "ERROR: destination does not exist: $DST" >&2; exit 1; }
+
+OS=$(uname -s)
+case "$OS" in
+  Darwin)
+    for entry in "$SRC"/* "$SRC"/.[!.]*; do
+      [ -e "$entry" ] || continue
+      name=$(basename "$entry")
+      [ "$name" = ".git" ] && continue
+      cp -c -R "$entry" "$DST/"
+    done
+    ;;
+  Linux)
+    for entry in "$SRC"/* "$SRC"/.[!.]*; do
+      [ -e "$entry" ] || continue
+      name=$(basename "$entry")
+      [ "$name" = ".git" ] && continue
+      cp -a --reflink=auto "$entry" "$DST/"
+    done
+    ;;
+  MINGW*|MSYS*|CYGWIN*)
+    HELPER="$(dirname "$0")/worktwin-light-clone.ps1"
+    if [ ! -f "$HELPER" ]; then
+      echo "ERROR: PowerShell mirror not found at $HELPER" >&2
+      exit 1
+    fi
+    powershell -NoProfile -ExecutionPolicy Bypass -File "$HELPER" -Src "$SRC" -Dst "$DST"
+    ;;
+  *)
+    echo "ERROR: unsupported OS: $OS" >&2
+    exit 1
+    ;;
+esac

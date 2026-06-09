@@ -1,37 +1,56 @@
 #!/usr/bin/env bash
 # worktwin-init - atomic spawn of a worktwin parallel worker.
 # Pluggable: usable from any skill or directly from a shell.
+# Supports light mode (0-overhead worktrees via filesystem CoW) when
+# the underlying filesystem supports it (APFS, btrfs, XFS with reflink,
+# Windows ReFS).
 set -e
 
 usage() {
   cat <<'EOF'
-worktwin-init <from-branch> <new-branch> "<task>"
+worktwin-init [--light=<mode>] <from-branch> <new-branch> "<task>"
 
 Sets up a git worktree for a parallel worker. Verifies the repo,
 resolves the source branch (fetching from origin if needed), creates
 the worktree, and writes a state file inside the shared git directory.
 
-Prints a JSON object on stdout:
-{
-  "main_repo":  "/abs/path/to/repo",
-  "worktree":   "/abs/path/to/repo--slug",
-  "branch":     "<new-branch>",
-  "from_branch":"<from-branch>",
-  "from_ref":   "<from-branch or origin/from-branch>",
-  "state_file": "/abs/path/to/.git/parallel/slug.json",
-  "warnings":   [optional strings]
-}
+Light mode flags:
+  --light=auto    (default) Use light mode if filesystem supports CoW
+                  and the worktree is feasible. Else fall back silently
+                  to a standard git worktree add.
+  --light=on      Require light mode. Error out if not possible.
+  --light=off     Skip light mode entirely.
+  --no-light      Alias for --light=off.
+  --light         Alias for --light=on.
 
-Exits non-zero on any error. Errors go to stderr.
+Prints a JSON object on stdout with the calculated paths, references,
+chosen light mode, and any warnings.
+
+Exits non-zero on operational error. Errors go to stderr.
 EOF
 }
 
-if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-  usage; exit 0
-fi
+# Parse flags and positional args
+LIGHT_MODE="auto"
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) usage; exit 0 ;;
+    --light=*) LIGHT_MODE="${arg#--light=}" ;;
+    --light)   LIGHT_MODE="on" ;;
+    --no-light) LIGHT_MODE="off" ;;
+    *) ARGS+=("$arg") ;;
+  esac
+done
+set -- "${ARGS[@]}"
+
+case "$LIGHT_MODE" in
+  auto|on|off) ;;
+  *) echo "ERROR: invalid --light mode: $LIGHT_MODE" >&2; exit 2 ;;
+esac
 
 if [ $# -lt 3 ]; then
-  echo "usage: worktwin-init <from-branch> <new-branch> \"<task>\"" >&2
+  echo "usage: worktwin-init [--light=auto|on|off] <from-branch> <new-branch> \"<task>\"" >&2
   exit 2
 fi
 
@@ -49,11 +68,13 @@ GIT_COMMON_DIR=$(cd "$GIT_COMMON_DIR" && pwd)
 MAIN_REPO=$(cd "$(dirname "$GIT_COMMON_DIR")" && pwd)
 REPO_NAME=$(basename "$MAIN_REPO")
 BRANCH_SLUG=$(echo "$NEW_BRANCH" | sed 's|[^a-zA-Z0-9._-]|-|g')
-WORKTREE_PATH="$(dirname "$MAIN_REPO")/${REPO_NAME}--${BRANCH_SLUG}"
 
 WARNINGS=()
+# Use -ef to compare by device+inode, not string. Different mount styles
+# (Windows C:/... vs Git Bash /c/... vs symlink /tmp) can produce different
+# strings for the same directory.
 CURRENT_TOPLEVEL=$(git rev-parse --show-toplevel)
-if [ "$CURRENT_TOPLEVEL" != "$MAIN_REPO" ]; then
+if ! [ "$CURRENT_TOPLEVEL" -ef "$MAIN_REPO" ]; then
   WARNINGS+=("invoked from a worktree, using main repo as base")
 fi
 
@@ -67,6 +88,86 @@ else
   exit 1
 fi
 
+# Resolve sibling bin scripts
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+LIGHT_CHECK_BASH="$BIN_DIR/worktwin-light-check"
+LIGHT_CHECK_PS1="$BIN_DIR/worktwin-light-check.ps1"
+LIGHT_BASE_TOOL="$BIN_DIR/worktwin-light-base"
+LIGHT_CLONE="$BIN_DIR/worktwin-light-clone"
+
+# Default WORKTREE_PATH (same-volume convention)
+WORKTREE_PATH="$(dirname "$MAIN_REPO")/${REPO_NAME}--${BRANCH_SLUG}"
+CLONE_SOURCE=""
+LIGHT_ACTIVE=false
+LIGHT_REASON="not attempted"
+
+# Helper: run light-check on a path and echo cow_capable boolean
+check_cow_capable() {
+  local target="$1" json cow
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      json=$(powershell -NoProfile -ExecutionPolicy Bypass \
+        -File "$LIGHT_CHECK_PS1" -Path "$target" 2>/dev/null || true)
+      ;;
+    *)
+      json=$("$LIGHT_CHECK_BASH" "$target" 2>/dev/null || true)
+      ;;
+  esac
+  if [ -z "$json" ]; then echo "false"; return; fi
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$json" | jq -r '.cow_capable'
+  else
+    printf '%s' "$json" | grep -oE '"cow_capable":[[:space:]]*(true|false)' | sed 's/.*: *//'
+  fi
+}
+
+if [ "$LIGHT_MODE" != "off" ]; then
+  LIGHT_BASE_PATH=""
+  if [ -x "$LIGHT_BASE_TOOL" ] && command -v jq >/dev/null 2>&1; then
+    LIGHT_BASE_JSON=$("$LIGHT_BASE_TOOL" get "$MAIN_REPO" 2>/dev/null || true)
+    if [ -n "$LIGHT_BASE_JSON" ]; then
+      LIGHT_BASE_PATH=$(printf '%s' "$LIGHT_BASE_JSON" | jq -r '.light_base // empty')
+    fi
+  fi
+
+  if [ -n "$LIGHT_BASE_PATH" ] && [ -d "$LIGHT_BASE_PATH" ]; then
+    CLONE_SOURCE="$LIGHT_BASE_PATH"
+    WORKTREE_PATH="$(dirname "$LIGHT_BASE_PATH")/$(basename "$LIGHT_BASE_PATH")--${BRANCH_SLUG}"
+  else
+    CLONE_SOURCE="$MAIN_REPO"
+  fi
+
+  COW=$(check_cow_capable "$CLONE_SOURCE")
+  if [ "$COW" = "true" ]; then
+    if [ "$CLONE_SOURCE" = "$MAIN_REPO" ]; then
+      MAIN_HEAD=$(git -C "$MAIN_REPO" rev-parse HEAD)
+      FROM_HEAD=$(git rev-parse "$FROM_REF")
+      if [ "$MAIN_HEAD" = "$FROM_HEAD" ]; then
+        LIGHT_ACTIVE=true
+        LIGHT_REASON="same-volume CoW from main repo"
+      else
+        LIGHT_REASON="main repo is not on $FROM_BRANCH, cannot CoW from it (use a light base or check out $FROM_BRANCH on main)"
+      fi
+    else
+      if git -C "$CLONE_SOURCE" fetch --quiet 2>/dev/null; then :; fi
+      if git -C "$CLONE_SOURCE" reset --hard "$FROM_REF" --quiet 2>/dev/null; then
+        LIGHT_ACTIVE=true
+        LIGHT_REASON="cross-volume CoW from configured light base"
+      else
+        LIGHT_REASON="could not sync light base to $FROM_REF"
+      fi
+    fi
+  else
+    LIGHT_REASON="filesystem at $CLONE_SOURCE is not CoW-capable"
+  fi
+
+  if [ "$LIGHT_ACTIVE" != "true" ] && [ "$LIGHT_MODE" = "on" ]; then
+    echo "ERROR: --light=on requested but light mode not possible: $LIGHT_REASON" >&2
+    exit 1
+  fi
+fi
+
+# Worktree creation
 if [ -d "$WORKTREE_PATH" ]; then
   if ! git worktree list --porcelain | grep -q "^worktree $WORKTREE_PATH$"; then
     echo "ERROR: $WORKTREE_PATH exists but is not a registered worktree" >&2
@@ -74,10 +175,24 @@ if [ -d "$WORKTREE_PATH" ]; then
   fi
   WARNINGS+=("worktree already registered, reusing")
 else
-  if git rev-parse --verify "$NEW_BRANCH" >/dev/null 2>&1; then
-    git worktree add "$WORKTREE_PATH" "$NEW_BRANCH" >/dev/null
+  if [ "$LIGHT_ACTIVE" = "true" ]; then
+    if git rev-parse --verify "$NEW_BRANCH" >/dev/null 2>&1; then
+      git worktree add --no-checkout "$WORKTREE_PATH" "$NEW_BRANCH" >/dev/null
+    else
+      git worktree add --no-checkout -b "$NEW_BRANCH" "$WORKTREE_PATH" "$FROM_REF" >/dev/null
+    fi
+    "$LIGHT_CLONE" "$CLONE_SOURCE" "$WORKTREE_PATH"
+    git -C "$WORKTREE_PATH" read-tree --reset HEAD
+    WARNINGS+=("$LIGHT_REASON")
   else
-    git worktree add -b "$NEW_BRANCH" "$WORKTREE_PATH" "$FROM_REF" >/dev/null
+    if git rev-parse --verify "$NEW_BRANCH" >/dev/null 2>&1; then
+      git worktree add "$WORKTREE_PATH" "$NEW_BRANCH" >/dev/null
+    else
+      git worktree add -b "$NEW_BRANCH" "$WORKTREE_PATH" "$FROM_REF" >/dev/null
+    fi
+    if [ "$LIGHT_MODE" = "auto" ] && [ "$LIGHT_REASON" != "not attempted" ]; then
+      WARNINGS+=("light mode skipped: $LIGHT_REASON")
+    fi
   fi
 fi
 
@@ -86,8 +201,6 @@ mkdir -p "$PARALLEL_DIR"
 STATE_FILE="$PARALLEL_DIR/${BRANCH_SLUG}.json"
 STARTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# Minimal JSON escape for the fallback path. Handles backslash, quote,
-# newline, tab. ASCII-only inputs are the supported case.
 json_escape() {
   local s="$1"
   s=${s//\\/\\\\}
@@ -97,6 +210,9 @@ json_escape() {
   printf '%s' "$s"
 }
 
+LIGHT_MODE_VALUE="off"
+[ "$LIGHT_ACTIVE" = "true" ] && LIGHT_MODE_VALUE="active"
+
 write_state() {
   if command -v jq >/dev/null 2>&1; then
     jq -n \
@@ -105,7 +221,8 @@ write_state() {
       --arg worktree "$WORKTREE_PATH" \
       --arg task "$TASK" \
       --arg started "$STARTED_AT" \
-      '{branch:$branch, from_branch:$from, worktree:$worktree, task:$task, started_at:$started, status:"active"}' \
+      --arg light "$LIGHT_MODE_VALUE" \
+      '{branch:$branch, from_branch:$from, worktree:$worktree, task:$task, started_at:$started, status:"active", light_mode:$light}' \
       > "$STATE_FILE"
   else
     {
@@ -115,6 +232,7 @@ write_state() {
       printf '  "worktree": "%s",\n' "$(json_escape "$WORKTREE_PATH")"
       printf '  "task": "%s",\n' "$(json_escape "$TASK")"
       printf '  "started_at": "%s",\n' "$STARTED_AT"
+      printf '  "light_mode": "%s",\n' "$LIGHT_MODE_VALUE"
       printf '  "status": "active"\n'
       printf '}\n'
     } > "$STATE_FILE"
@@ -125,8 +243,11 @@ write_state
 emit_output() {
   if command -v jq >/dev/null 2>&1; then
     local warnings_json
-    warnings_json=$(printf '%s\n' "${WARNINGS[@]}" | jq -R . | jq -s .)
-    if [ ${#WARNINGS[@]} -eq 0 ]; then warnings_json='[]'; fi
+    if [ ${#WARNINGS[@]} -eq 0 ]; then
+      warnings_json='[]'
+    else
+      warnings_json=$(printf '%s\n' "${WARNINGS[@]}" | jq -R . | jq -s .)
+    fi
     jq -n \
       --arg mainrepo "$MAIN_REPO" \
       --arg worktree "$WORKTREE_PATH" \
@@ -134,8 +255,10 @@ emit_output() {
       --arg from "$FROM_BRANCH" \
       --arg fromref "$FROM_REF" \
       --arg state "$STATE_FILE" \
+      --arg light "$LIGHT_MODE_VALUE" \
+      --arg reason "$LIGHT_REASON" \
       --argjson warnings "$warnings_json" \
-      '{main_repo:$mainrepo, worktree:$worktree, branch:$branch, from_branch:$from, from_ref:$fromref, state_file:$state, warnings:$warnings}'
+      '{main_repo:$mainrepo, worktree:$worktree, branch:$branch, from_branch:$from, from_ref:$fromref, state_file:$state, light_mode:$light, light_reason:$reason, warnings:$warnings}'
   else
     printf '{\n'
     printf '  "main_repo": "%s",\n' "$(json_escape "$MAIN_REPO")"
@@ -144,6 +267,8 @@ emit_output() {
     printf '  "from_branch": "%s",\n' "$(json_escape "$FROM_BRANCH")"
     printf '  "from_ref": "%s",\n' "$(json_escape "$FROM_REF")"
     printf '  "state_file": "%s",\n' "$(json_escape "$STATE_FILE")"
+    printf '  "light_mode": "%s",\n' "$LIGHT_MODE_VALUE"
+    printf '  "light_reason": "%s",\n' "$(json_escape "$LIGHT_REASON")"
     if [ ${#WARNINGS[@]} -eq 0 ]; then
       printf '  "warnings": []\n'
     else
