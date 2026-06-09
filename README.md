@@ -41,6 +41,8 @@ cd worktwin
 
 To remove: `./uninstall.sh` with the same mode.
 
+Once installed, run `/worktwin-help` inside Claude Code at any time for the full list of commands, arguments, and short descriptions. The list is generated from the installed skills, so it always matches what is actually on your machine.
+
 ## Quick start
 
 Two terminals, same repository:
@@ -59,12 +61,6 @@ To see who is doing what at any point:
 
 ```
 /worktwin-status
-```
-
-To see every worktwin command available, with arguments and a short description:
-
-```
-/worktwin-help
 ```
 
 ## Shipping
