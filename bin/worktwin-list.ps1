@@ -50,6 +50,7 @@ foreach ($f in $files) {
         if ($LASTEXITCODE -eq 0 -and $st)   { $uncommitted  = ($st  | Measure-Object -Line).Lines }
     }
 
+    $light = if ($state.PSObject.Properties.Name -contains "light_mode") { $state.light_mode } else { "off" }
     $out = [ordered]@{
         branch          = $state.branch
         from_branch     = $state.from_branch
@@ -57,6 +58,7 @@ foreach ($f in $files) {
         task            = $state.task
         started_at      = $state.started_at
         status          = $state.status
+        light_mode      = $light
         worktree_exists = $exists
         commits_ahead   = $commitsAhead
         files_changed   = $filesChanged

@@ -38,8 +38,10 @@ If the output is empty, print `no active worktwin workers` and stop.
 Print one compact table:
 
 ```
-| Branch | Base | Worktree | Commits | Files | Uncommitted | Task |
+| Branch | Base | Light | Worktree | Commits | Files | Uncommitted | Task |
 ```
+
+The Light column shows `yes` when `light_mode` is `active`, blank otherwise.
 
 For workers where `worktree_exists` is `false`, replace the worktree column with `stale (worktree gone)` and the metric columns with `-`. Truncate the task column to a sensible width.
 

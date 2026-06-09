@@ -20,6 +20,7 @@ Each line:
     "task":            "...",
     "started_at":      "...",
     "status":          "active",
+    "light_mode":      "active" | "off",
     "worktree_exists": true|false,
     "commits_ahead":   N,
     "files_changed":   N,
@@ -58,13 +59,15 @@ extract_field() {
 
 emit_worker() {
   local file="$1"
-  local branch from worktree task started status
+  local branch from worktree task started status light
   branch=$(extract_field "$file" "branch")
   from=$(extract_field "$file" "from_branch")
   worktree=$(extract_field "$file" "worktree")
   task=$(extract_field "$file" "task")
   started=$(extract_field "$file" "started_at")
   status=$(extract_field "$file" "status")
+  light=$(extract_field "$file" "light_mode")
+  [ -z "$light" ] && light="off"
 
   if [ ${#FILTER[@]} -gt 0 ]; then
     local match=0
@@ -90,14 +93,15 @@ emit_worker() {
       --arg task "$task" \
       --arg started "$started" \
       --arg status "$status" \
+      --arg light "$light" \
       --argjson exists "$exists" \
       --argjson commits "$commits" \
       --argjson files "$files" \
       --argjson uncommitted "$uncommitted" \
-      '{branch:$branch, from_branch:$from, worktree:$worktree, task:$task, started_at:$started, status:$status, worktree_exists:$exists, commits_ahead:$commits, files_changed:$files, uncommitted:$uncommitted}'
+      '{branch:$branch, from_branch:$from, worktree:$worktree, task:$task, started_at:$started, status:$status, light_mode:$light, worktree_exists:$exists, commits_ahead:$commits, files_changed:$files, uncommitted:$uncommitted}'
   else
-    printf '{"branch":"%s","from_branch":"%s","worktree":"%s","task":"%s","started_at":"%s","status":"%s","worktree_exists":%s,"commits_ahead":%d,"files_changed":%d,"uncommitted":%d}\n' \
-      "$branch" "$from" "$worktree" "$task" "$started" "$status" "$exists" "$commits" "$files" "$uncommitted"
+    printf '{"branch":"%s","from_branch":"%s","worktree":"%s","task":"%s","started_at":"%s","status":"%s","light_mode":"%s","worktree_exists":%s,"commits_ahead":%d,"files_changed":%d,"uncommitted":%d}\n' \
+      "$branch" "$from" "$worktree" "$task" "$started" "$status" "$light" "$exists" "$commits" "$files" "$uncommitted"
   fi
 }
 

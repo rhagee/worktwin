@@ -106,6 +106,19 @@ worktwin-light-clone <src> <dst>         CoW copy, skips .git
 
 `worktwin-init` accepts `--light=auto|on|off`. Default is `auto`, which uses light when possible and falls back silently.
 
+## Platform status
+
+| Platform | Code complete | Live-tested | Notes |
+|---|---|---|---|
+| macOS APFS | yes | yes (v1.0) | clonefile via `cp -c`, validated on Apple Silicon |
+| Linux btrfs | yes | no (v1.0) | code path mirrors macOS, `cp -a --reflink=auto`. Community validation welcomed |
+| Linux XFS reflink | yes | no (v1.0) | same code as btrfs, plus the runtime reflink probe in `worktwin-light-check` |
+| Linux ZFS | yes | no (v1.0) | gated by `cp --reflink=always` probe |
+| Windows ReFS | yes | no (v1.0) | `Copy-Item` triggers Block Cloning on ReFS-to-ReFS within the same volume |
+| Windows NTFS | n/a | yes (v1.0) | correctly falls back to standard `git worktree add` |
+
+If you run light mode on a platform marked "no" for live-tested and find it works (or breaks), please open an issue with the `worktwin-light-check` output and your filesystem details. The code is logically identical across the CoW backends so confidence is high, but live confirmation per platform is the path to a labelled "yes".
+
 ## Limitations and caveats
 
 - The light path requires the clone source (main repo or configured base) to be on the same volume as the new worktree, because CoW does not cross volumes on any current filesystem.
