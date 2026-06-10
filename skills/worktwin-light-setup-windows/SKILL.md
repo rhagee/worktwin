@@ -28,6 +28,7 @@ In plain words, tell the user:
 - This will create a virtual disk file (VHDX) at a path they choose, default `C:\worktwin-dev-drive.vhdx`.
 - The VHDX is dynamic: it consumes only the space actually used, up to the cap. Default cap is 100 GB.
 - The VHDX is mounted as a new drive letter (default `D:`). The new drive is formatted as ReFS with Dev Drive optimisations.
+- A scheduled task is registered to re-mount the VHDX automatically at every system startup. Without this the Dev Drive would silently disappear after a reboot. The task runs as SYSTEM and only mounts the VHDX if the file still exists and is not already attached.
 - The operation needs an elevated PowerShell. If they are not already in one, they have to relaunch and rerun.
 - Nothing on existing volumes is touched.
 
@@ -98,13 +99,16 @@ Tell the user the next step: re-run `/worktwin-light-doctor <DRIVE_LETTER>:\` to
 
 If you have time, run it for them and report the result.
 
-## 8. Do not handle removal
+## 8. Removal
 
-This skill creates. It does not remove. If the user wants to undo the Dev Drive, the setup script's output already prints the two commands they need:
+When the user wants to undo the Dev Drive, hand them off to `/worktwin-light-teardown-windows`. That skill unregisters the auto-mount task, dismounts the VHDX, and deletes the file (each step with explicit confirmation). The setup script's "next steps" output already mentions it; reinforce it if the user asks.
+
+## 9. Recovery for an older install
+
+If the user already had a Dev Drive created by an earlier version of this script (before the auto-mount task was added), the VHDX file exists on disk but the boot-time mount entry is missing - so after a reboot the drive letter does not come back. Fix:
 
 ```
-Dismount-VHD -Path '<VHD_PATH>'
-Remove-Item '<VHD_PATH>'
+/worktwin-light-teardown-windows -RegisterAutoMountOnly -VhdPath <path/to.vhdx>
 ```
 
-Pointing them at those commands is enough. A dedicated removal skill is overkill for v1.0.
+That registers the missing task on the existing VHDX without touching the data.

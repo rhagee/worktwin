@@ -23,8 +23,13 @@ Safety notes:
     space (dynamic, so it grows as data is written, up to the cap).
   - Mounts the VHDX, partitions it, formats it as ReFS with Dev Drive
     optimisations enabled.
+  - Registers a scheduled task that re-mounts the VHDX at every system
+    startup, so the Dev Drive survives reboots. Task name is derived
+    from the VHDX file name (one task per Dev Drive). Pass
+    -SkipAutoMountTask to opt out.
   - Does not touch any existing volume.
-  - To remove the Dev Drive later: detach the VHD, delete the VHDX file.
+  - To remove the Dev Drive later: run worktwin-light-teardown-windows
+    (or detach the VHD, unregister the task, delete the VHDX file).
 #>
 
 [CmdletBinding()]
@@ -33,7 +38,8 @@ param(
     [int]$SizeGB,
     [string]$DriveLetter,
     [switch]$DryRun,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [switch]$SkipAutoMountTask
 )
 
 function Fail($msg) {
@@ -224,11 +230,68 @@ Info "size:       $([Math]::Round($vol.Size/1GB,1)) GB"
 Info "free:       $([Math]::Round($vol.SizeRemaining/1GB,1)) GB"
 Ok "Dev Drive ready at $DriveLetter`:"
 
+# Register the auto-mount scheduled task so the Dev Drive survives
+# reboots. Without this, after the next restart the VHDX file is still
+# on disk but no longer attached, and the drive letter disappears -
+# which defeats the entire purpose of the setup. One task per VHDX file
+# (name derived from the file basename) so multiple Dev Drives do not
+# collide.
+if ($SkipAutoMountTask) {
+    Step "Auto-mount task: skipped (-SkipAutoMountTask)"
+    Info "warning: the Dev Drive will NOT be remounted automatically on next boot."
+    Info "to re-enable: re-run this script without -SkipAutoMountTask, or run"
+    Info "             worktwin-light-teardown-windows -RegisterAutoMountOnly"
+} else {
+    Step "Registering auto-mount task for next boot"
+
+    $vhdResolved = (Resolve-Path -LiteralPath $VhdPath).Path
+    $taskName = "worktwin-mount-" + [IO.Path]::GetFileNameWithoutExtension($vhdResolved)
+
+    # The action: a self-contained PowerShell one-liner that mounts the
+    # VHDX only if it exists and is not already attached. Safe to run
+    # repeatedly; safe even if the user later deletes the VHDX.
+    $mountCmd = "if ((Test-Path -LiteralPath '$vhdResolved') -and -not (Get-VHD -Path '$vhdResolved' -ErrorAction SilentlyContinue).Attached) { Mount-VHD -Path '$vhdResolved' -ErrorAction SilentlyContinue }"
+    $action = New-ScheduledTaskAction `
+        -Execute 'powershell.exe' `
+        -Argument "-NoProfile -WindowStyle Hidden -Command `"$mountCmd`""
+
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId 'SYSTEM' `
+        -LogonType ServiceAccount `
+        -RunLevel Highest
+
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+
+    $description = "Re-mount the worktwin Dev Drive VHDX at $vhdResolved at every system startup. Created by worktwin-light-setup-windows.ps1. To remove: worktwin-light-teardown-windows -VhdPath '$vhdResolved' -KeepFile, or Unregister-ScheduledTask -TaskName '$taskName' -Confirm:`$false."
+
+    Register-ScheduledTask `
+        -TaskName $taskName `
+        -Description $description `
+        -Action $action `
+        -Trigger $trigger `
+        -Principal $principal `
+        -Settings $settings `
+        -Force | Out-Null
+    Ok "scheduled task '$taskName' registered (runs as SYSTEM at startup)"
+}
+
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Green
 Write-Host "  1. Re-run /worktwin-light-doctor $DriveLetter`:\ inside Claude Code to confirm light mode is available." -ForegroundColor Gray
 Write-Host "  2. Move or clone your large repos under $DriveLetter`:\, or configure a light-mode base mapping." -ForegroundColor Gray
+if (-not $SkipAutoMountTask) {
+    Write-Host "  3. Reboot once to verify the auto-mount task brings $DriveLetter`: back automatically." -ForegroundColor Gray
+}
 Write-Host ""
 Write-Host "To remove this Dev Drive later:" -ForegroundColor Gray
-Write-Host "  Dismount-VHD -Path '$VhdPath'   (or use diskpart 'detach vdisk')" -ForegroundColor Gray
-Write-Host "  Remove-Item '$VhdPath'" -ForegroundColor Gray
+Write-Host "  /worktwin-light-teardown-windows           (interactive cleanup)" -ForegroundColor Gray
+Write-Host "  or, manually:" -ForegroundColor Gray
+Write-Host "    Unregister-ScheduledTask -TaskName 'worktwin-mount-$([IO.Path]::GetFileNameWithoutExtension($VhdPath))' -Confirm:`$false" -ForegroundColor Gray
+Write-Host "    Dismount-VHD -Path '$VhdPath'" -ForegroundColor Gray
+Write-Host "    Remove-Item '$VhdPath'" -ForegroundColor Gray

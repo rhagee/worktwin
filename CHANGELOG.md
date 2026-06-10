@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Critical**: `worktwin-light-setup-windows` now registers a `worktwin-mount-<vhdname>` scheduled task that runs at system startup and re-mounts the Dev Drive VHDX. Without this fix the VHDX file stayed on disk after a reboot but no longer attached to a drive letter, silently breaking light mode until the user noticed the missing letter and reattached manually. Existing installs created by older versions can be repaired non-destructively with `/worktwin-light-teardown-windows -RegisterAutoMountOnly -VhdPath <existing.vhdx>`. Pass `-SkipAutoMountTask` to the setup script to opt out of the new behaviour.
+
 ### Added
 
+- `/worktwin-light-teardown-windows` and `bin/worktwin-light-teardown-windows.ps1` — clean removal flow for a worktwin Dev Drive. Three modes: full teardown (unregister task → dismount → delete VHDX), keep-the-file (`-KeepFile`), and repair (`-RegisterAutoMountOnly`) for older installs missing the boot-time mount task. Each destructive step prompts unless `-NonInteractive -DeleteFile` is passed.
 - `/worktwin-merge-solver <branch> [<branch> ...]` — cross-PR conflict resolution for sibling worktwin workers. Discovers the workers passed as arguments, groups them by `from_branch`, runs `git merge-tree` pairwise per group to find real conflicts, then for each conflicting group reads each worker's `WORKTWIN.md` task, recent commits, and per-file diff to propose an intent-aware resolution. The user can accept the proposal verbatim, override per file ("prefer A on X", "keep both on Y"), pick a custom combined branch name, or skip the group. Conflicting groups collapse into a single combined branch + PR (title and body synthesised from both children's tasks); clean siblings keep their independent PRs. Original PRs are closed as "superseded by #N" only on explicit user confirmation, and the local branches and history are preserved. No force-push, ever.
 - New `bin/worktwin-merge-solver` (bash + `.ps1`) with subcommands `discover`, `prepare`, `merge-step`, `finalize-step`, `push`, `open-pr`, `close-original`. Each subcommand is one atomic deterministic operation; the skill orchestrates them and lets the agent drive the conversation.
 

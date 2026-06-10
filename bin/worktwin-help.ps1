@@ -42,6 +42,7 @@ $order = @(
     "worktwin-clear",
     "worktwin-light-doctor",
     "worktwin-light-setup-windows",
+    "worktwin-light-teardown-windows",
     "worktwin-update",
     "worktwin-help"
 )

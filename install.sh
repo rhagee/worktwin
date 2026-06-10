@@ -27,7 +27,7 @@ if [ ! -d "$SRC" ]; then
 fi
 
 mkdir -p "$TARGET"
-for skill in worktwin worktwin-ship worktwin-ship-all worktwin-finalize worktwin-merge-solver worktwin-status worktwin-clear worktwin-light-doctor worktwin-light-setup-windows worktwin-help worktwin-update; do
+for skill in worktwin worktwin-ship worktwin-ship-all worktwin-finalize worktwin-merge-solver worktwin-status worktwin-clear worktwin-light-doctor worktwin-light-setup-windows worktwin-light-teardown-windows worktwin-help worktwin-update; do
   rm -rf "$TARGET/$skill"
   cp -r "$SRC/$skill" "$TARGET/"
 done

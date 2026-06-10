@@ -43,7 +43,7 @@ fi
 
 [ $USE_FENCE -eq 1 ] && printf '```\n'
 
-ORDER="worktwin worktwin-status worktwin-ship worktwin-ship-all worktwin-finalize worktwin-merge-solver worktwin-clear worktwin-light-doctor worktwin-light-setup-windows worktwin-update worktwin-help"
+ORDER="worktwin worktwin-status worktwin-ship worktwin-ship-all worktwin-finalize worktwin-merge-solver worktwin-clear worktwin-light-doctor worktwin-light-setup-windows worktwin-light-teardown-windows worktwin-update worktwin-help"
 
 emit() {
   local file="$1/SKILL.md"
