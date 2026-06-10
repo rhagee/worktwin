@@ -141,29 +141,40 @@ if ($RegisterAutoMountOnly) {
         Fail "cannot register auto-mount for a missing VHDX: $VhdPath"
     }
 
-    Step "Mounting $VhdPath if not already attached"
-    $attached = (Get-VHD -Path $VhdPath -ErrorAction SilentlyContinue).Attached
-    if (-not $attached) {
-        Mount-VHD -Path $VhdPath -ErrorAction Stop | Out-Null
-        Ok "VHDX mounted"
-    } else {
-        Skip "VHDX already attached"
+    # Locate the mount helper script. It lives in the same bin dir as
+    # this script when installed via install.ps1 / install.sh. We avoid
+    # Mount-VHD / Get-VHD direct calls here on purpose - they are
+    # missing on Windows Home and break this entire flow if assumed.
+    $helperScript = Join-Path (Split-Path $MyInvocation.MyCommand.Path -Parent) 'worktwin-mount-helper.ps1'
+    if (-not (Test-Path -LiteralPath $helperScript)) {
+        Fail "mount helper script not found at $helperScript. Re-run the install."
     }
 
+    Step "Mounting $VhdPath via helper (if not already attached)"
+    & $helperScript -VhdPath $VhdPath
+    $alreadyMounted = $false
+    try {
+        $alreadyMounted = [bool](Get-Disk -ErrorAction SilentlyContinue | Where-Object { $_.BusType -eq 'File Backed Virtual' -and $_.OperationalStatus -eq 'Online' })
+    } catch { }
+    if ($alreadyMounted) { Ok "VHDX is attached" } else { Info "VHDX mount status uncertain (no FBV disk visible)" }
+
     Step "Registering auto-mount task '$taskName'"
-    $mountCmd = "if ((Test-Path -LiteralPath '$VhdPath') -and -not (Get-VHD -Path '$VhdPath' -ErrorAction SilentlyContinue).Attached) { Mount-VHD -Path '$VhdPath' -ErrorAction SilentlyContinue }"
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-        -Argument "-NoProfile -WindowStyle Hidden -Command `"$mountCmd`""
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$helperScript`" -VhdPath `"$VhdPath`""
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
         -LogonType ServiceAccount -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -StartWhenAvailable `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-    Register-ScheduledTask -TaskName $taskName `
-        -Description "Re-mount the worktwin Dev Drive VHDX at $VhdPath at every system startup. Created by worktwin-light-teardown-windows.ps1 -RegisterAutoMountOnly." `
-        -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    Ok "scheduled task '$taskName' registered"
+    try {
+        Register-ScheduledTask -TaskName $taskName `
+            -Description "Re-mount the worktwin Dev Drive VHDX at $VhdPath at every system startup, via $helperScript. Created by worktwin-light-teardown-windows.ps1 -RegisterAutoMountOnly." `
+            -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+        Ok "scheduled task '$taskName' registered"
+    } catch {
+        Fail "Register-ScheduledTask failed: $($_.Exception.Message)"
+    }
 
     $vol = Get-Disk | Where-Object { $_.BusType -eq 'File Backed Virtual' } | Get-Partition |
            Where-Object { $_.DriveLetter } | Select-Object -First 1
@@ -195,16 +206,53 @@ if ($task) {
     Skip "no such task"
 }
 
-# Step 2: dismount the VHDX
+# Step 2: dismount the VHDX. Hyper-V-agnostic: use Mount/Dismount-VHD
+# when available, fall back to diskpart on Windows Home.
+function Dismount-VhdAgnostic([string]$Path) {
+    if (Get-Command Dismount-VHD -ErrorAction SilentlyContinue) {
+        Dismount-VHD -Path $Path -ErrorAction Stop
+        return
+    }
+    $script = @"
+select vdisk file="$Path"
+detach vdisk
+"@
+    $tmp = [System.IO.Path]::GetTempFileName()
+    try {
+        Set-Content -Path $tmp -Value $script -Encoding ascii
+        $out = & diskpart /s $tmp 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "diskpart detach failed: $out"
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Step "Checking if $VhdPath is mounted"
-$attached = $null
+$attached = $false
 if (Test-Path -LiteralPath $VhdPath) {
-    try { $attached = (Get-VHD -Path $VhdPath -ErrorAction Stop).Attached } catch { $attached = $false }
+    if (Get-Command Get-VHD -ErrorAction SilentlyContinue) {
+        try { $attached = (Get-VHD -Path $VhdPath -ErrorAction Stop).Attached } catch { $attached = $false }
+    } else {
+        # No Get-VHD: best-effort heuristic. If any File Backed Virtual
+        # disk is online and this is the only worktwin VHDX on the box,
+        # assume it is ours. Worst case: detach is a no-op or errors,
+        # which is handled.
+        try {
+            $fbv = Get-Disk -ErrorAction SilentlyContinue | Where-Object { $_.BusType -eq 'File Backed Virtual' -and $_.OperationalStatus -eq 'Online' }
+            if ($fbv) { $attached = $true }
+        } catch { }
+    }
 }
 if ($attached) {
     if ($NonInteractive -or (Confirm-Or-Skip "Dismount VHDX?")) {
-        Dismount-VHD -Path $VhdPath -ErrorAction Stop
-        Ok "dismounted"
+        try {
+            Dismount-VhdAgnostic $VhdPath
+            Ok "dismounted"
+        } catch {
+            Info "dismount failed: $($_.Exception.Message)"
+        }
     } else {
         Skip "kept mounted (user)"
     }

@@ -284,13 +284,21 @@ if ($SkipAutoMountTask) {
     $vhdResolved = (Resolve-Path -LiteralPath $VhdPath).Path
     $taskName = "worktwin-mount-" + [IO.Path]::GetFileNameWithoutExtension($vhdResolved)
 
-    # The action: a self-contained PowerShell one-liner that mounts the
-    # VHDX only if it exists and is not already attached. Safe to run
-    # repeatedly; safe even if the user later deletes the VHDX.
-    $mountCmd = "if ((Test-Path -LiteralPath '$vhdResolved') -and -not (Get-VHD -Path '$vhdResolved' -ErrorAction SilentlyContinue).Attached) { Mount-VHD -Path '$vhdResolved' -ErrorAction SilentlyContinue }"
+    # The task action invokes the worktwin-mount-helper.ps1 script that
+    # ships next to this one. The helper handles both the Mount-VHD
+    # path (Windows Pro / Enterprise with Hyper-V cmdlets) and the
+    # diskpart fallback (Windows Home), so the task does not need to
+    # know which path applies. Decoupling the logic out of the task
+    # action keeps the action small and lets us debug / upgrade the
+    # mount code without re-registering the task.
+    $helperScript = Join-Path (Split-Path $MyInvocation.MyCommand.Path -Parent) 'worktwin-mount-helper.ps1'
+    if (-not (Test-Path -LiteralPath $helperScript)) {
+        Fail "mount helper script not found at $helperScript. Re-run the install."
+    }
+
     $action = New-ScheduledTaskAction `
         -Execute 'powershell.exe' `
-        -Argument "-NoProfile -WindowStyle Hidden -Command `"$mountCmd`""
+        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$helperScript`" -VhdPath `"$vhdResolved`""
 
     $trigger = New-ScheduledTaskTrigger -AtStartup
 
@@ -305,17 +313,24 @@ if ($SkipAutoMountTask) {
         -StartWhenAvailable `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
 
-    $description = "Re-mount the worktwin Dev Drive VHDX at $vhdResolved at every system startup. Created by worktwin-light-setup-windows.ps1. To remove: worktwin-light-teardown-windows -VhdPath '$vhdResolved' -KeepFile, or Unregister-ScheduledTask -TaskName '$taskName' -Confirm:`$false."
+    $description = "Re-mount the worktwin Dev Drive VHDX at $vhdResolved at every system startup, via $helperScript. Created by worktwin-light-setup-windows.ps1. To remove: worktwin-light-teardown-windows -VhdPath '$vhdResolved' -KeepFile, or Unregister-ScheduledTask -TaskName '$taskName' -Confirm:`$false."
 
-    Register-ScheduledTask `
-        -TaskName $taskName `
-        -Description $description `
-        -Action $action `
-        -Trigger $trigger `
-        -Principal $principal `
-        -Settings $settings `
-        -Force | Out-Null
-    Ok "scheduled task '$taskName' registered (runs as SYSTEM at startup)"
+    try {
+        Register-ScheduledTask `
+            -TaskName $taskName `
+            -Description $description `
+            -Action $action `
+            -Trigger $trigger `
+            -Principal $principal `
+            -Settings $settings `
+            -Force -ErrorAction Stop | Out-Null
+        Ok "scheduled task '$taskName' registered (runs as SYSTEM at startup, via worktwin-mount-helper.ps1)"
+    } catch {
+        Info "ERROR: Register-ScheduledTask failed: $($_.Exception.Message)"
+        Info "Dev Drive will work for this session but will NOT auto-remount after a reboot."
+        Info "Repair: worktwin-light-teardown-windows -RegisterAutoMountOnly -VhdPath '$vhdResolved'"
+        Fail "auto-mount task registration failed; see above"
+    }
 }
 
 Write-Host ""
@@ -327,11 +342,8 @@ if (-not $SkipAutoMountTask) {
 }
 Write-Host ""
 Write-Host "To remove this Dev Drive later:" -ForegroundColor Gray
-Write-Host "  /worktwin-light-teardown-windows           (interactive cleanup)" -ForegroundColor Gray
-Write-Host "  or, manually:" -ForegroundColor Gray
-Write-Host "    Unregister-ScheduledTask -TaskName 'worktwin-mount-$([IO.Path]::GetFileNameWithoutExtension($VhdPath))' -Confirm:`$false" -ForegroundColor Gray
-Write-Host "    Dismount-VHD -Path '$VhdPath'" -ForegroundColor Gray
-Write-Host "    Remove-Item '$VhdPath'" -ForegroundColor Gray
+Write-Host "  /worktwin-light-teardown-windows           (interactive, recommended)" -ForegroundColor Gray
+Write-Host "  bin\worktwin-light-teardown-windows.ps1   (same, but bypasses Claude Code)" -ForegroundColor Gray
 
 # If we are the elevated child (spawned via UAC), the parent terminal is
 # unaware of our output - this is a new window that would close on exit.
