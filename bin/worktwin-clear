@@ -90,35 +90,47 @@ clear_one() {
   return 0
 }
 
-# After a clear pass, sweep the auto-discovered base worktree: if there
-# are no more workers parked under it, remove it. The Dev Drive ends up
-# clean when no work is in flight, exactly mirroring the user-visible
-# parallel/ state. Only paths under .worktwin-bases are touched - any
-# user-configured light base is left alone.
+# After a clear pass, sweep every auto-discovered base worktree for
+# this repo: for each base under .worktwin-bases that has no remaining
+# worker hanging off it, remove the base. There may be more than one
+# base when workers have been spawned from different source branches
+# (one base per (repo, from_branch) pair). User-configured light bases
+# outside .worktwin-bases are never touched.
 sweep_auto_base() {
-  local main_repo base_json base_path workers_left
+  local main_repo repo_name
   main_repo=$(cd "$(dirname "$GIT_COMMON_DIR")" && pwd)
-  local tool="$(dirname "$0")/worktwin-light-base"
-  [ -x "$tool" ] || return 0
-  command -v jq >/dev/null 2>&1 || return 0
-  base_json=$("$tool" get "$main_repo" 2>/dev/null || true)
-  [ -n "$base_json" ] || return 0
-  base_path=$(printf '%s' "$base_json" | jq -r '.light_base // empty')
-  [ -n "$base_path" ] || return 0
-  case "$base_path" in
-    */.worktwin-bases/*) ;;
-    *) return 0 ;;
-  esac
-  [ -d "$base_path" ] || { "$tool" remove "$main_repo" >/dev/null 2>&1 || true; return 0; }
-  workers_left=$(git -C "$main_repo" worktree list --porcelain 2>/dev/null \
-    | awk -v base="$base_path" '/^worktree/ { if ($2 != base && index($2, base "--") == 1) c++ } END { print c+0 }')
-  if [ "$workers_left" = "0" ]; then
-    git -C "$main_repo" worktree remove "$base_path" 2>/dev/null \
-      || git -C "$main_repo" worktree remove --force "$base_path" 2>/dev/null \
-      || rm -rf "$base_path"
-    echo "removed auto base worktree (no workers left): $base_path"
-    "$tool" remove "$main_repo" >/dev/null 2>&1 || true
-  fi
+  repo_name=$(basename "$main_repo")
+
+  # All registered worktrees for the main repo, sorted by path so
+  # children come after their base.
+  local registered
+  registered=$(git -C "$main_repo" worktree list --porcelain 2>/dev/null \
+    | awk '/^worktree/ { print $2 }')
+  [ -n "$registered" ] || return 0
+
+  # Iterate the candidate bases: registered worktrees whose path looks
+  # like .../.worktwin-bases/<repo_name>__<from_slug> (no `--` past the
+  # `__`, i.e. it is a base, not a worker).
+  local base workers_left
+  while IFS= read -r base; do
+    [ -n "$base" ] || continue
+    case "$base" in
+      */.worktwin-bases/${repo_name}__*) ;;
+      *) continue ;;
+    esac
+    # If the path contains '--' it is a worker, not a base.
+    case "${base##*/}" in
+      *--*) continue ;;
+    esac
+    workers_left=$(printf '%s\n' "$registered" \
+      | awk -v base="$base" '$0 != base && index($0, base "--") == 1 { c++ } END { print c+0 }')
+    if [ "$workers_left" = "0" ]; then
+      git -C "$main_repo" worktree remove "$base" 2>/dev/null \
+        || git -C "$main_repo" worktree remove --force "$base" 2>/dev/null \
+        || rm -rf "$base"
+      echo "removed auto base worktree (no workers left): $base"
+    fi
+  done <<< "$registered"
 }
 
 if [ $ALL -eq 1 ]; then
