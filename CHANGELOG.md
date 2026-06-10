@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `/worktwin-merge-solver <branch> [<branch> ...]` — cross-PR conflict resolution for sibling worktwin workers. Discovers the workers passed as arguments, groups them by `from_branch`, runs `git merge-tree` pairwise per group to find real conflicts, then for each conflicting group reads each worker's `WORKTWIN.md` task, recent commits, and per-file diff to propose an intent-aware resolution. The user can accept the proposal verbatim, override per file ("prefer A on X", "keep both on Y"), pick a custom combined branch name, or skip the group. Conflicting groups collapse into a single combined branch + PR (title and body synthesised from both children's tasks); clean siblings keep their independent PRs. Original PRs are closed as "superseded by #N" only on explicit user confirmation, and the local branches and history are preserved. No force-push, ever.
+- New `bin/worktwin-merge-solver` (bash + `.ps1`) with subcommands `discover`, `prepare`, `merge-step`, `finalize-step`, `push`, `open-pr`, `close-original`. Each subcommand is one atomic deterministic operation; the skill orchestrates them and lets the agent drive the conversation.
+
+### Changed
+
+- `worktwin-ship` and `worktwin-ship-all` no longer remove worktrees or state files after a successful ship. Shipping is no longer the worker's terminal event; the worktree, the state file, and the `WORKTWIN.md` context are deliberately preserved so the worker can be reused by `/worktwin-merge-solver` or by the user to iterate further on the branch. Cleanup now happens only via the explicit `/worktwin-clear <branch>`.
+- `worktwin-claude-md` now splits the rules across two files instead of cramming everything into the worktree's `CLAUDE.md`. The full DO/DO NOT rules, bound branch, source branch, and task live in a new `WORKTWIN.md` at the worktree root. `CLAUDE.md` keeps any branch-level content (company rules, project standards) verbatim, and gets a small `@WORKTWIN.md` reference block appended at the bottom. The worktwin rules therefore layer on top of the original project rules instead of pushing them down. Existing worktwin blocks are stripped wherever they were and reapplied at the bottom on the next run, so any pre-v1.0.0-style block is migrated automatically.
+
+### Added
+
+- `worktwin-claude-md` now hard-rules both `CLAUDE.md` and `WORKTWIN.md` out of git. Tracked files (e.g., a company `CLAUDE.md` inherited from the branch) get `git update-index --skip-worktree`; untracked files get an anchored entry in the per-worktree `info/exclude`. Both files are also explicitly called out in the appended block, so the agent itself warns the user before any explicit commit. The branch-level `CLAUDE.md` is therefore preserved as content (visible to Claude Code) and as a tracked git object (untouched on the branch).
+
 ## v1.0.0 - 2026-06-10
 
 Initial public release.

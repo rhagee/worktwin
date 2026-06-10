@@ -107,44 +107,28 @@ Keep it tight. Two or three short paragraphs plus a bullet list is usually enoug
 
 End the body with a single trailing line: `Opened by worktwin.`
 
-## 7. Cleanup after successful ship
+## 7. Preserve local state
 
-Shipping is the worker's terminal event. As soon as a worker is shipped successfully, it should disappear from `/worktwin-status`: the worktree directory is removed and the state file in `parallel/` is deleted. The remote branch and the open PR are untouched, so the work itself is preserved on GitHub.
+Shipping is *not* the worker's terminal event. The worktree and state file are deliberately kept on disk after a successful ship so the worker can be reused — by `/worktwin-merge-solver` (which needs the worktrees and their `WORKTWIN.md` context to resolve cross-PR conflicts), or by the user to iterate further on the branch without re-spawning.
 
-Run cleanup for each worker that satisfies ALL of these:
+Do not remove worktrees. Do not delete state files. Do not delete branches.
 
-- Push succeeded
-- PR was either created or updated (or, if `gh` was unavailable, the user got the manual commands)
-- The worker was clean (`uncommitted == 0`)
-
-Do not clean up:
-
-- Workers with `commits_ahead == 0` that were skipped (nothing happened, nothing to undo)
-- Workers with `dirty` status (uncommitted changes would be lost on `git worktree remove`)
-- Workers where the push or PR step errored out (the user may want to retry)
-
-For each worker that passes the gate:
-
-```bash
-git worktree remove "<worktree>"
-rm "$(git rev-parse --git-common-dir)/parallel/<slug>.json"
-```
-
-Do not delete the branch. The branch lives on the remote with an open PR; deleting it locally is fine when `git worktree remove` cleans up the working copy, but you do not need to touch refs/heads explicitly.
-
-If the user later wants to keep iterating on the same branch, they can spawn it again with `/worktwin <from> <branch> "..."` and worktwin will reattach the existing branch in a fresh worktree.
-
-If the user wants to push and open a PR without losing the worktree (e.g. they expect to iterate again before the PR is reviewed), they should run `/worktwin-finalize` instead: that command produces the same PR draft and the same push command but never touches the local state.
+When the user is truly done with a worker, they run `/worktwin-clear <branch>` themselves to drop the worktree and the state file. The remote branch and the open PR are independent of local state and remain untouched either way.
 
 ## 8. Final table
 
 Recap only the shipped subset:
 
 ```
-| Branch | Base | Commits | Files | PR | Conflict | Status | Cleaned |
+| Branch | Base | Commits | Files | PR | Conflict | Status |
 ```
 
 - PR: PR number, or `manual` if `gh` was not used, or `skipped (no commits)` for workers with nothing ahead.
 - Conflict: `clean`, `files overlap`, or `blocking`.
 - Status: `clean` when the working tree was empty, or `dirty (N uncommitted)` when the worker left a non-empty working tree behind. Dirty is reportable, not blocking; the committed work shipped, the uncommitted tail did not.
-- Cleaned: `yes` if the worktree and state file were removed after a successful ship, `no (<reason>)` otherwise (dirty, no commits, push or PR error).
+
+End the output with a one-line footer:
+
+```
+worktrees preserved. run /worktwin-merge-solver <branches...> to resolve cross-PR conflicts, or /worktwin-clear <branch> when a worker is fully retired.
+```

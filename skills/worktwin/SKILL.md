@@ -57,13 +57,19 @@ The script prints a JSON object on stdout. Capture it and read these fields (use
 
 If the script exits non-zero, show its stderr to the user and stop.
 
-## 3. Pin the rules to the worktree CLAUDE.md
+## 3. Pin the rules to the worktree
 
 ```bash
 "$WORKTWIN_BIN/worktwin-claude-md" "<worktree>" "$new_branch" "$from_branch" "$task"
 ```
 
-The script writes or updates the marked block in the worktree's `CLAUDE.md`. It is idempotent and preserves any other content in the file. This is the only thing that makes the rules survive `/compact` and any new Claude Code session opened in the worktree, so do not skip it.
+The script does three things, all idempotent:
+
+1. Writes the full DO/DO NOT rules, branch binding, and task into `WORKTWIN.md` at the worktree root.
+2. Appends a small `@WORKTWIN.md` reference block to the **bottom** of the worktree's `CLAUDE.md`. The original branch CLAUDE.md content (if any) is preserved verbatim above the block, so any company / project rules still apply with priority.
+3. Marks both files so git will not stage them: tracked files get `--skip-worktree`, untracked files get appended to the per-worktree `info/exclude`.
+
+This is the only thing that makes the rules survive `/compact` and any new Claude Code session opened in the worktree, so do not skip it.
 
 ## 4. Summary
 

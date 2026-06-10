@@ -1,0 +1,573 @@
+#!/usr/bin/env bash
+# worktwin-merge-solver - cross-PR conflict resolution toolkit.
+#
+# This script is the deterministic plumbing. Each subcommand performs
+# one atomic operation. The skills/worktwin-merge-solver/SKILL.md
+# orchestrates them and lets the agent drive the conversation and the
+# actual conflict resolution (it knows the workers' intent from each
+# WORKTWIN.md). The script never asks the user, never prints free-form
+# prose; it emits JSON and lets the skill format and present.
+#
+# Subcommands:
+#   discover <branch> [<branch> ...]
+#   prepare  <base> <child> [<child> ...] [--name=<branch>]
+#   merge-step <combined-worktree> <child>
+#   finalize-step <combined-worktree> --message=<m>
+#   push <combined-worktree> [--remote=<r>]
+#   open-pr <combined-worktree> --base=<b> --title=<t> --body=<f> [--draft]
+#   close-original <pr-num> [<pr-num> ...] --superseded-by=<n>
+set -e
+
+usage() {
+  cat <<'EOF'
+worktwin-merge-solver <subcommand> [args]
+
+Subcommands (run with -h for details):
+  discover         scan worktwin workers, group by base, report conflicts
+  prepare          create the combined worktree for one base group
+  merge-step       attempt `git merge <child>` into the combined worktree
+  finalize-step    commit a resolved merge step
+  push             push the combined branch
+  open-pr          open the combined PR via gh
+  close-original   close superseded child PRs via gh
+
+JSON on stdout for every subcommand. Errors on stderr, non-zero exit.
+EOF
+}
+
+SUB="${1:-}"
+[ -n "$SUB" ] || { usage; exit 2; }
+shift
+
+case "$SUB" in
+  -h|--help|help) usage; exit 0 ;;
+esac
+
+# ------- shared helpers -------------------------------------------------
+
+BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+HAVE_JQ=0
+command -v jq >/dev/null 2>&1 && HAVE_JQ=1
+
+# jq on Windows sometimes terminates lines with CRLF. Wrap raw output
+# so downstream string comparisons and shell args do not carry a CR.
+jqr() { jq -r "$@" | tr -d '\r'; }
+
+require_jq() {
+  if [ $HAVE_JQ -eq 0 ]; then
+    echo "ERROR: worktwin-merge-solver $SUB requires jq" >&2
+    local os; os=$(uname -s 2>/dev/null || echo unknown)
+    case "$os" in
+      Darwin)
+        echo "       install on macOS: brew install jq" >&2 ;;
+      Linux)
+        if   command -v apt-get >/dev/null 2>&1; then echo "       install: sudo apt-get install jq" >&2
+        elif command -v dnf     >/dev/null 2>&1; then echo "       install: sudo dnf install jq" >&2
+        elif command -v pacman  >/dev/null 2>&1; then echo "       install: sudo pacman -S jq" >&2
+        elif command -v apk     >/dev/null 2>&1; then echo "       install: sudo apk add jq" >&2
+        else                                          echo "       install via your distro package manager (search for 'jq')" >&2
+        fi ;;
+      MINGW*|MSYS*|CYGWIN*)
+        if   command -v scoop  >/dev/null 2>&1; then echo "       install: scoop install jq" >&2
+        elif command -v winget >/dev/null 2>&1; then echo "       install: winget install jqlang.jq" >&2
+        elif command -v choco  >/dev/null 2>&1; then echo "       install: choco install jq" >&2
+        else                                         echo "       install with scoop / winget / choco, e.g.: scoop install jq" >&2
+        fi
+        echo "       (the PowerShell flavour does not need jq: use bin/worktwin-merge-solver.ps1)" >&2 ;;
+      *)
+        echo "       see https://jqlang.github.io/jq/download/" >&2 ;;
+    esac
+    exit 1
+  fi
+}
+
+require_git_repo() {
+  if ! git rev-parse --git-common-dir >/dev/null 2>&1; then
+    echo "ERROR: not inside a git repository" >&2
+    exit 1
+  fi
+}
+
+# Slugify: keep [A-Za-z0-9._-], replace runs of anything else with '-'.
+slug() {
+  printf '%s' "$1" | sed -E 's|[^A-Za-z0-9._-]+|-|g; s|^-+||; s|-+$||'
+}
+
+json_escape() {
+  if [ $HAVE_JQ -eq 1 ]; then
+    printf '%s' "$1" | jq -Rs .
+  else
+    local s="$1"
+    s=${s//\\/\\\\}
+    s=${s//\"/\\\"}
+    s=${s//$'\n'/\\n}
+    s=${s//$'\t'/\\t}
+    printf '"%s"' "$s"
+  fi
+}
+
+# Resolve a worker's state by branch using worktwin-list. Returns JSON
+# on stdout or empty if no match. Requires jq.
+resolve_worker() {
+  local branch="$1"
+  "$BIN_DIR/worktwin-list" "$branch" 2>/dev/null \
+    | jq -c --arg b "$branch" 'select(.branch == $b)' | head -n 1
+}
+
+# ------- discover -------------------------------------------------------
+
+cmd_discover() {
+  require_git_repo
+  require_jq
+
+  if [ $# -lt 1 ]; then
+    echo "usage: worktwin-merge-solver discover <branch> [<branch> ...]" >&2
+    exit 2
+  fi
+
+  local order=("$@")
+  local resolved='[]'
+  local missing='[]'
+
+  for b in "${order[@]}"; do
+    local w
+    w=$(resolve_worker "$b")
+    if [ -z "$w" ]; then
+      missing=$(jq -c --arg b "$b" '. + [$b]' <<<"$missing")
+    else
+      # attach the WORKTWIN.md path (if present) and a recent commit list
+      local wt; wt=$(jqr '.worktree' <<<"$w")
+      local from; from=$(jqr '.from_branch' <<<"$w")
+      local wt_md=""
+      [ -f "$wt/WORKTWIN.md" ] && wt_md="$wt/WORKTWIN.md"
+      local commits='[]'
+      if git rev-parse --verify "$b" >/dev/null 2>&1 \
+         && git rev-parse --verify "$from" >/dev/null 2>&1; then
+        commits=$(git log --format='%H%x09%s' "$from..$b" 2>/dev/null \
+          | jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {sha:.[0], subject:.[1]})')
+        [ -z "$commits" ] && commits='[]'
+      fi
+      w=$(jq -c \
+            --arg md "$wt_md" \
+            --argjson commits "$commits" \
+            '. + {worktwin_md:$md, commits:$commits}' <<<"$w")
+      resolved=$(jq -c --argjson w "$w" '. + [$w]' <<<"$resolved")
+    fi
+  done
+
+  # Build groups keyed by from_branch, preserving the order the caller
+  # passed for the children inside each group.
+  local groups='[]'
+  local seen_bases='[]'
+  while IFS= read -r b; do
+    [ -z "$b" ] && continue
+    if ! jq -e --arg b "$b" 'index($b)' <<<"$seen_bases" >/dev/null; then
+      seen_bases=$(jq -c --arg b "$b" '. + [$b]' <<<"$seen_bases")
+      local children
+      children=$(jq -c --arg b "$b" '[.[] | select(.from_branch == $b)]' <<<"$resolved")
+      groups=$(jq -c \
+        --arg base "$b" \
+        --argjson children "$children" \
+        '. + [{base:$base, children:$children, conflicts:[], status:"unknown"}]' <<<"$groups")
+    fi
+  done < <(jqr '.[].from_branch' <<<"$resolved")
+
+  # For each group with >1 child, run pairwise merge-tree to enumerate
+  # the files that would conflict. Singleton groups stay status=alone.
+  local n_groups
+  n_groups=$(jq 'length' <<<"$groups" | tr -d '\r')
+  local i=0
+  while [ $i -lt $n_groups ]; do
+    local base
+    base=$(jqr ".[$i].base" <<<"$groups")
+    local children_count
+    children_count=$(jq ".[$i].children | length" <<<"$groups" | tr -d '\r')
+
+    if [ "$children_count" -le 1 ]; then
+      groups=$(jq -c ".[$i].status = \"alone\"" <<<"$groups")
+      i=$((i+1)); continue
+    fi
+
+    # Make sure base ref exists locally (try a fetch on miss, silent).
+    if ! git rev-parse --verify "$base" >/dev/null 2>&1; then
+      git fetch --quiet origin "$base" 2>/dev/null || true
+    fi
+    local base_ref="$base"
+    if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
+      base_ref="origin/$base"
+    fi
+
+    local conflicts='[]'
+    local j=0
+    while [ $j -lt $children_count ]; do
+      local k=$((j+1))
+      while [ $k -lt $children_count ]; do
+        local A B
+        A=$(jqr ".[$i].children[$j].branch" <<<"$groups")
+        B=$(jqr ".[$i].children[$k].branch" <<<"$groups")
+        # git merge-tree --write-tree with --merge-base prints conflict
+        # markers in the synthesised blobs. We extract the file paths
+        # via the --name-only adjacent listing.
+        local mt_out
+        mt_out=$(git merge-tree --write-tree --merge-base="$base_ref" "$A" "$B" 2>/dev/null || true)
+        # The conflicted files appear in the trailer after a blank line
+        # in the form "Auto-merging <path>" / "CONFLICT (...): ... in <path>".
+        local files
+        files=$(printf '%s\n' "$mt_out" \
+          | awk '
+              /^CONFLICT/ {
+                # CONFLICT (...) lines end with "in <path>"
+                if (match($0, / in [^ ].*$/)) {
+                  print substr($0, RSTART+4)
+                }
+              }
+            ' | sort -u)
+        if [ -n "$files" ]; then
+          local files_json
+          files_json=$(printf '%s\n' "$files" \
+            | jq -R -s 'split("\n") | map(select(length>0))')
+          conflicts=$(jq -c \
+            --arg a "$A" --arg b "$B" \
+            --argjson files "$files_json" \
+            '. + [{a:$a, b:$b, files:$files}]' <<<"$conflicts")
+        fi
+        k=$((k+1))
+      done
+      j=$((j+1))
+    done
+
+    local status="clean"
+    [ "$(jq 'length' <<<"$conflicts")" -gt 0 ] && status="conflicting"
+    groups=$(jq -c \
+      --argjson c "$conflicts" \
+      --arg s "$status" \
+      --arg br "$base_ref" \
+      ".[$i].conflicts = \$c | .[$i].status = \$s | .[$i].base_ref = \$br" \
+      <<<"$groups")
+    i=$((i+1))
+  done
+
+  jq -n \
+    --argjson order "$(printf '%s\n' "${order[@]}" | jq -R -s 'split("\n") | map(select(length>0))')" \
+    --argjson resolved "$resolved" \
+    --argjson groups "$groups" \
+    --argjson missing "$missing" \
+    '{input_order:$order, workers:$resolved, groups:$groups, missing:$missing}'
+}
+
+# ------- prepare --------------------------------------------------------
+
+cmd_prepare() {
+  require_git_repo
+  require_jq
+
+  local name=""
+  local args=()
+  for arg in "$@"; do
+    case "$arg" in
+      --name=*) name="${arg#--name=}" ;;
+      *) args+=("$arg") ;;
+    esac
+  done
+  set -- "${args[@]}"
+
+  if [ $# -lt 2 ]; then
+    echo "usage: worktwin-merge-solver prepare <base> <child> [<child> ...] [--name=<combined>]" >&2
+    exit 2
+  fi
+
+  local base="$1"; shift
+  local children=("$@")
+
+  # Refresh refs so the combined branch starts at the latest base.
+  # Prefer origin/<base> over the local copy: the combined PR will be
+  # judged against what is on the remote anyway, so starting from the
+  # canonical upstream state is what makes the merge "one click away".
+  git fetch --quiet origin "$base" 2>/dev/null || true
+  local base_ref=""
+  if git rev-parse --verify "origin/$base" >/dev/null 2>&1; then
+    base_ref="origin/$base"
+  elif git rev-parse --verify "$base" >/dev/null 2>&1; then
+    base_ref="$base"
+  else
+    echo "ERROR: base branch '$base' not found locally or on origin" >&2
+    exit 1
+  fi
+
+  if [ -z "$name" ]; then
+    local children_slug=""
+    for c in "${children[@]}"; do
+      local s; s=$(slug "$c")
+      if [ -z "$children_slug" ]; then children_slug="$s"
+      else children_slug="${children_slug}+${s}"
+      fi
+    done
+    name="worktwin-merge/$(slug "$base")/$children_slug"
+  fi
+
+  if git rev-parse --verify "$name" >/dev/null 2>&1; then
+    echo "ERROR: combined branch '$name' already exists. Pass a different --name= or delete it first." >&2
+    exit 1
+  fi
+
+  local git_common_dir; git_common_dir=$(git rev-parse --git-common-dir)
+  git_common_dir=$(cd "$git_common_dir" && pwd)
+  local main_repo; main_repo=$(cd "$(dirname "$git_common_dir")" && pwd)
+  local repo_name; repo_name=$(basename "$main_repo")
+  local name_slug; name_slug=$(slug "$name")
+  local combined_worktree="$(dirname "$main_repo")/${repo_name}--merge-${name_slug}"
+
+  if [ -e "$combined_worktree" ]; then
+    echo "ERROR: combined worktree path already exists: $combined_worktree" >&2
+    exit 1
+  fi
+
+  git worktree add -q -b "$name" "$combined_worktree" "$base_ref" >/dev/null
+
+  jq -n \
+    --arg combined_branch "$name" \
+    --arg combined_worktree "$combined_worktree" \
+    --arg base "$base" \
+    --arg base_ref "$base_ref" \
+    --argjson children "$(printf '%s\n' "${children[@]}" | jq -R -s 'split("\n") | map(select(length>0))')" \
+    '{combined_branch:$combined_branch, combined_worktree:$combined_worktree, base:$base, base_ref:$base_ref, children:$children}'
+}
+
+# ------- merge-step -----------------------------------------------------
+
+cmd_merge_step() {
+  require_git_repo
+  require_jq
+
+  if [ $# -lt 2 ]; then
+    echo "usage: worktwin-merge-solver merge-step <combined-worktree> <child>" >&2
+    exit 2
+  fi
+  local wt="$1"; local child="$2"
+  if [ ! -d "$wt" ]; then
+    echo "ERROR: combined worktree not found: $wt" >&2
+    exit 1
+  fi
+
+  # Make sure child ref is visible from the combined worktree.
+  local child_ref=""
+  if ! git -C "$wt" rev-parse --verify "$child" >/dev/null 2>&1; then
+    git -C "$wt" fetch --quiet origin "$child" 2>/dev/null || true
+  fi
+  if git -C "$wt" rev-parse --verify "$child" >/dev/null 2>&1; then
+    child_ref="$child"
+  elif git -C "$wt" rev-parse --verify "origin/$child" >/dev/null 2>&1; then
+    child_ref="origin/$child"
+  else
+    echo "ERROR: child branch '$child' not found locally or on origin" >&2
+    exit 1
+  fi
+
+  # Attempt the merge. --no-commit so we always commit explicitly in
+  # finalize-step (uniform behaviour whether or not there were
+  # conflicts).
+  set +e
+  git -C "$wt" merge --no-ff --no-commit "$child_ref" >/dev/null 2>&1
+  local rc=$?
+  set -e
+
+  local conflicting='[]'
+  if [ $rc -ne 0 ]; then
+    # Enumerate unmerged paths via the index.
+    conflicting=$(git -C "$wt" diff --name-only --diff-filter=U \
+      | jq -R -s 'split("\n") | map(select(length>0))')
+  fi
+
+  local status="clean"
+  [ "$(jq 'length' <<<"$conflicting")" -gt 0 ] && status="conflict"
+
+  jq -n \
+    --arg status "$status" \
+    --arg child "$child" \
+    --arg child_ref "$child_ref" \
+    --argjson conflicting "$conflicting" \
+    '{status:$status, child:$child, child_ref:$child_ref, conflicting_files:$conflicting}'
+}
+
+# ------- finalize-step --------------------------------------------------
+
+cmd_finalize_step() {
+  require_git_repo
+  require_jq
+
+  local msg=""
+  local args=()
+  for arg in "$@"; do
+    case "$arg" in
+      --message=*) msg="${arg#--message=}" ;;
+      *) args+=("$arg") ;;
+    esac
+  done
+  set -- "${args[@]}"
+
+  if [ $# -lt 1 ] || [ -z "$msg" ]; then
+    echo "usage: worktwin-merge-solver finalize-step <combined-worktree> --message=<commit-message>" >&2
+    exit 2
+  fi
+  local wt="$1"
+  if [ ! -d "$wt" ]; then
+    echo "ERROR: combined worktree not found: $wt" >&2
+    exit 1
+  fi
+
+  # Refuse if any conflict markers remain. git diff --check spots
+  # leftover <<<<<<<, =======, >>>>>>> lines.
+  if ! git -C "$wt" diff --check >/dev/null 2>&1; then
+    echo "ERROR: unresolved conflict markers present in $wt" >&2
+    exit 1
+  fi
+
+  git -C "$wt" add -A
+  git -C "$wt" commit -q -m "$msg"
+  local sha; sha=$(git -C "$wt" rev-parse HEAD)
+
+  jq -n --arg sha "$sha" --arg msg "$msg" '{sha:$sha, message:$msg}'
+}
+
+# ------- push -----------------------------------------------------------
+
+cmd_push() {
+  require_git_repo
+  require_jq
+
+  local remote="origin"
+  local args=()
+  for arg in "$@"; do
+    case "$arg" in
+      --remote=*) remote="${arg#--remote=}" ;;
+      *) args+=("$arg") ;;
+    esac
+  done
+  set -- "${args[@]}"
+
+  if [ $# -lt 1 ]; then
+    echo "usage: worktwin-merge-solver push <combined-worktree> [--remote=<remote>]" >&2
+    exit 2
+  fi
+  local wt="$1"
+  if [ ! -d "$wt" ]; then
+    echo "ERROR: combined worktree not found: $wt" >&2
+    exit 1
+  fi
+  local branch; branch=$(git -C "$wt" rev-parse --abbrev-ref HEAD)
+
+  git -C "$wt" push -u "$remote" "$branch" >&2
+  jq -n --arg remote "$remote" --arg branch "$branch" '{remote:$remote, branch:$branch}'
+}
+
+# ------- open-pr --------------------------------------------------------
+
+cmd_open_pr() {
+  require_git_repo
+  require_jq
+
+  local base="" title="" body="" draft=""
+  local args=()
+  for arg in "$@"; do
+    case "$arg" in
+      --base=*)  base="${arg#--base=}" ;;
+      --title=*) title="${arg#--title=}" ;;
+      --body=*)  body="${arg#--body=}" ;;
+      --draft)   draft="--draft" ;;
+      *) args+=("$arg") ;;
+    esac
+  done
+  set -- "${args[@]}"
+
+  if [ $# -lt 1 ] || [ -z "$base" ] || [ -z "$title" ]; then
+    echo "usage: worktwin-merge-solver open-pr <combined-worktree> --base=<base> --title=<t> --body=<b> [--draft]" >&2
+    exit 2
+  fi
+  local wt="$1"
+  if [ ! -d "$wt" ]; then
+    echo "ERROR: combined worktree not found: $wt" >&2
+    exit 1
+  fi
+  if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
+    echo "ERROR: gh is missing or unauthenticated" >&2
+    exit 1
+  fi
+  local head; head=$(git -C "$wt" rev-parse --abbrev-ref HEAD)
+
+  # gh uses the cwd's repo, so run from the combined worktree.
+  local url
+  if [ -n "$draft" ]; then
+    url=$(cd "$wt" && gh pr create --base "$base" --head "$head" --title "$title" --body "$body" --draft 2>&1)
+  else
+    url=$(cd "$wt" && gh pr create --base "$base" --head "$head" --title "$title" --body "$body" 2>&1)
+  fi
+  local rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "ERROR: gh pr create failed: $url" >&2
+    exit 1
+  fi
+
+  local num
+  num=$(printf '%s' "$url" | grep -oE '/pull/[0-9]+' | head -n1 | sed 's|/pull/||')
+  if [ -z "$num" ]; then
+    # Fallback: ask gh for the newly opened PR matching this head.
+    num=$(cd "$wt" && gh pr list --head "$head" --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+  fi
+
+  jq -n --arg url "$url" --arg num "$num" --arg head "$head" \
+    '{url:$url, number:($num | tonumber? // null), head:$head}'
+}
+
+# ------- close-original -------------------------------------------------
+
+cmd_close_original() {
+  require_jq
+
+  local superseded=""
+  local prs=()
+  for arg in "$@"; do
+    case "$arg" in
+      --superseded-by=*) superseded="${arg#--superseded-by=}" ;;
+      *) prs+=("$arg") ;;
+    esac
+  done
+
+  if [ -z "$superseded" ] || [ ${#prs[@]} -eq 0 ]; then
+    echo "usage: worktwin-merge-solver close-original <pr-num> [<pr-num> ...] --superseded-by=<n>" >&2
+    exit 2
+  fi
+  if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
+    echo "ERROR: gh is missing or unauthenticated" >&2
+    exit 1
+  fi
+
+  local results='[]'
+  local comment="Superseded by #${superseded} (combined via worktwin-merge-solver). The branch and history are preserved."
+  for pr in "${prs[@]}"; do
+    local ok=true err=""
+    if ! gh pr comment "$pr" --body "$comment" >/dev/null 2>&1; then
+      ok=false; err="comment failed"
+    fi
+    if ! gh pr close "$pr" >/dev/null 2>&1; then
+      ok=false; err="${err:+$err; }close failed"
+    fi
+    results=$(jq -c --arg pr "$pr" --argjson ok "$ok" --arg err "$err" \
+      '. + [{pr:($pr | tonumber? // null), closed:$ok, error:$err}]' <<<"$results")
+  done
+
+  jq -n --argjson results "$results" --arg superseded "$superseded" \
+    '{superseded_by:($superseded | tonumber? // null), results:$results}'
+}
+
+# ------- dispatch -------------------------------------------------------
+
+case "$SUB" in
+  discover)        cmd_discover "$@" ;;
+  prepare)         cmd_prepare "$@" ;;
+  merge-step)      cmd_merge_step "$@" ;;
+  finalize-step)   cmd_finalize_step "$@" ;;
+  push)            cmd_push "$@" ;;
+  open-pr)         cmd_open_pr "$@" ;;
+  close-original)  cmd_close_original "$@" ;;
+  *) echo "ERROR: unknown subcommand: $SUB" >&2; usage; exit 2 ;;
+esac

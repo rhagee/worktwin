@@ -20,6 +20,25 @@ State files live in `$(git rev-parse --git-common-dir)/parallel/`, not in `.git/
 
 If the directory is empty but you know there are worktrees, fall back to `git worktree list` to find them and pass the branch names explicitly to `/worktwin-ship` or `/worktwin-finalize`.
 
+## `worktwin-merge-solver` says it needs jq
+
+The bash flavour of `worktwin-merge-solver` builds deeply nested JSON (groups, conflicts, worker contexts) and uses `jq` to keep that logic compact and correct. `jq` is a hard requirement only for that script in the bash flavour. Every other worktwin bash script has a jq-optional fallback, and the PowerShell flavour of every script (including `worktwin-merge-solver.ps1`) uses native `ConvertTo-Json` / `ConvertFrom-Json` and does not need `jq` at all.
+
+Install jq:
+
+| platform | command |
+|---|---|
+| macOS | `brew install jq` |
+| Debian/Ubuntu | `sudo apt-get install jq` |
+| Fedora/RHEL | `sudo dnf install jq` |
+| Arch | `sudo pacman -S jq` |
+| Alpine | `sudo apk add jq` |
+| Windows (scoop) | `scoop install jq` |
+| Windows (winget) | `winget install jqlang.jq` |
+| Windows (choco) | `choco install jq` |
+
+The error message printed by the script also includes the matching hint for the detected platform. The installer (`install.sh`) checks for jq at the end and prints the same hint if it is missing.
+
 ## `gh` is not authenticated
 
 Run `gh auth login` once, then retry the ship command. Until then, ship will print the manual `git push` and `gh pr create` commands for you to run yourself. If you prefer to keep `gh` out of the loop entirely, use `/worktwin-finalize`: it never calls `gh` and gives you the same draft PR title and body to use however you want.

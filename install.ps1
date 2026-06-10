@@ -36,6 +36,7 @@ $Skills = @(
     "worktwin-ship",
     "worktwin-ship-all",
     "worktwin-finalize",
+    "worktwin-merge-solver",
     "worktwin-status",
     "worktwin-clear",
     "worktwin-light-doctor",
@@ -73,3 +74,26 @@ Write-Host "worktwin installed to $Target"
 Write-Host ""
 Write-Host "Run /worktwin-help inside Claude Code to see every command."
 Write-Host "Standalone CLI tools at $Target\worktwin\bin"
+
+# Soft dependency note: the PowerShell flavour of every script (including
+# worktwin-merge-solver.ps1) uses native ConvertTo-Json / ConvertFrom-Json
+# and does not need jq. We only nudge here when the user does NOT have jq
+# AND is likely to also run the bash flavour from Git Bash / WSL.
+$jq = Get-Command jq -ErrorAction SilentlyContinue
+$gitBash = (Test-Path "C:\Program Files\Git\bin\bash.exe") -or (Test-Path "C:\Program Files (x86)\Git\bin\bash.exe")
+$wsl = Get-Command wsl -ErrorAction SilentlyContinue
+if (-not $jq -and ($gitBash -or $wsl)) {
+    Write-Host ""
+    Write-Host "note: 'jq' was not found on PATH."
+    Write-Host "      the PowerShell flavour of every worktwin script works without it."
+    Write-Host "      jq is only needed if you also run the bash scripts (Git Bash / WSL)."
+    if (Get-Command scoop -ErrorAction SilentlyContinue) {
+        Write-Host "      install: scoop install jq"
+    } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "      install: winget install jqlang.jq"
+    } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
+        Write-Host "      install: choco install jq"
+    } else {
+        Write-Host "      install with scoop / winget / choco, e.g.: scoop install jq"
+    }
+}

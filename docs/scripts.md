@@ -10,6 +10,7 @@ Every script ships in two flavours that follow the same contract:
 | `worktwin-claude-md` | `bin/worktwin-claude-md` | `bin/worktwin-claude-md.ps1` |
 | `worktwin-list` | `bin/worktwin-list` | `bin/worktwin-list.ps1` |
 | `worktwin-clear` | `bin/worktwin-clear` | `bin/worktwin-clear.ps1` |
+| `worktwin-merge-solver` | `bin/worktwin-merge-solver` | `bin/worktwin-merge-solver.ps1` |
 
 After install they land at:
 
@@ -58,13 +59,23 @@ Exit codes:
 
 ## worktwin-claude-md
 
-Write or update the worktwin rules block in a worktree's `CLAUDE.md`, between explicit markers. Idempotent.
+Set up the worktwin parallel-worker context in a worktree. Writes two files and prevents both from being committed. Idempotent.
 
 ```
 worktwin-claude-md <worktree-path> <branch> <from-branch> "<task>"
 ```
 
-The block is delimited by `<!-- BEGIN worktwin -->` and `<!-- END worktwin -->`. Existing blocks are replaced in place. Content outside the markers is preserved verbatim. If no `CLAUDE.md` exists yet, one is created with just the block.
+Files written:
+
+- **`WORKTWIN.md`** — full DO/DO NOT rules, bound branch, source branch, task, and the hard-rule about never committing the worktwin context files. Always rewritten.
+- **`CLAUDE.md`** — original content preserved verbatim. A small reference block delimited by `<!-- BEGIN worktwin -->` / `<!-- END worktwin -->` is appended at the **bottom**, pointing at `@WORKTWIN.md`. If no `CLAUDE.md` exists yet, one is created with just that block. An existing worktwin block anywhere in the file is stripped first, so re-runs always land the block at the bottom.
+
+Both files are then marked so git will not stage them on `git add -A` or `git commit -a`:
+
+- if the file is tracked in the index (e.g., a company `CLAUDE.md` inherited from the branch), `git update-index --skip-worktree` is set — the modification stays on disk but `git status` and staging ignore it
+- if the file is untracked, an anchored entry (`/CLAUDE.md`, `/WORKTWIN.md`) is appended to the per-worktree `info/exclude`
+
+The agent is also told explicitly in the appended block to warn the user before any explicit commit of either file. The original branch CLAUDE.md is therefore preserved both as content (visible to Claude Code) and as a tracked git object (untouched on the branch).
 
 No stdout on success. Errors go to stderr. Exit codes match `worktwin-init`.
 
@@ -97,6 +108,39 @@ Each line:
 When the parallel directory is missing, exits silently with no output. Filtering by branch is silent when no matches are found, not an error.
 
 `jq` is recommended. The bash version falls back to a simpler parser when `jq` is missing, which is fine for ASCII-only task strings but can mishandle exotic characters. The PowerShell version uses the native `ConvertFrom-Json` and `ConvertTo-Json` with no fallback needed.
+
+## worktwin-merge-solver
+
+Cross-PR conflict resolution. One subcommand per atomic operation; the agent layer (the skill) orchestrates them. Requires `jq` in the bash flavour.
+
+```
+worktwin-merge-solver <subcommand> [args]
+```
+
+Subcommands:
+
+- `discover <branch> [<branch> ...]`
+  Validate each branch has a worktwin state file, group by `from_branch`, run `git merge-tree --merge-base=<base>` pairwise per group, and emit JSON: `input_order`, `workers` (with `worktwin_md` path and recent `commits`), `groups` (`status`: `alone` | `clean` | `conflicting`, with conflict pairs and files per pair), and `missing` branches. Working tree is never touched.
+
+- `prepare <base> <child> [<child> ...] [--name=<combined-branch>]`
+  Create a fresh worktree off `origin/<base>` (falls back to local `<base>`) on a new branch. The default combined branch name is `worktwin-merge/<base-slug>/<child1>+<child2>[+...]`. Returns `combined_branch`, `combined_worktree`, `base_ref`, `children`.
+
+- `merge-step <combined-worktree> <child>`
+  Run `git merge --no-ff --no-commit <child>` inside the combined worktree. Emits JSON with `status` (`clean` | `conflict`) and `conflicting_files`. Use the Edit tool to write resolutions when status is `conflict`, then call `finalize-step`.
+
+- `finalize-step <combined-worktree> --message=<commit-message>`
+  Refuses to commit when any conflict marker is left (`git diff --check`). On success, stages everything and commits the merge with the given message. Returns the new HEAD `sha`.
+
+- `push <combined-worktree> [--remote=<remote>]`
+  Push the combined branch to `--remote=` (default `origin`) with `-u`.
+
+- `open-pr <combined-worktree> --base=<base> --title=<t> --body=<f> [--draft]`
+  Open a PR via `gh` from the combined branch to `<base>`. Returns the PR `url`, `number`, and `head` branch. Errors if `gh` is missing or unauthenticated.
+
+- `close-original <pr-num> [<pr-num> ...] --superseded-by=<n>`
+  Comment "Superseded by #N (combined via worktwin-merge-solver). The branch and history are preserved." on each PR, then close it via `gh`. Returns a per-PR `closed: true|false` result.
+
+The skill `worktwin-merge-solver` ties these together: read each worker's `WORKTWIN.md` and diff, propose per-file resolutions with reasoning, dialogue with the user, then drive the subcommands in sequence and ask for explicit confirmation before push, PR open, and original-PR closing.
 
 ## worktwin-clear
 

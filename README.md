@@ -1,9 +1,9 @@
 # worktwin
 
-> Spawn isolated Claude Code agents on parallel branches. No conflicts, no chaos.
-> Light mode: 0 disk overhead on APFS, btrfs, XFS, and Windows ReFS.
+> Parallel Claude Code agents on isolated branches, with an intent-aware merge-conflict solver. From "async PRs" to "review and one click to merge".
+> Light mode: 0 disk overhead per worker on APFS, btrfs, XFS, and Windows ReFS.
 
-worktwin is a Claude Code skill, not a CLI tool. Install it once, invoke it inside Claude Code with `/worktwin`, and the agent configures itself to work on a dedicated branch in an isolated git worktree. Multiple sessions on the same repo, zero context bleed, and on capable filesystems each parallel worker adds near-zero bytes to disk.
+worktwin is a Claude Code skill suite, not a CLI tool. Install it once, invoke it inside Claude Code with `/worktwin`, and the agent configures itself to work on a dedicated branch in an isolated git worktree. Multiple sessions on the same repo, zero context bleed, and when those PRs collide on the way home `/worktwin-merge-solver` reads each worker's intent and resolves the conflict for you.
 
 <!-- TODO: replace with demo GIF -->
 ![demo](docs/demo.gif)
@@ -12,7 +12,9 @@ worktwin is a Claude Code skill, not a CLI tool. Install it once, invoke it insi
 
 Two Claude Code sessions, same repo, same file: chaos. Plain git worktrees give you filesystem isolation but do not tell the agent how to behave. The agent still wanders, switches branches, edits files in the other worktree, and your parallel work collapses into one tangled history.
 
-And the disk bill: every standard worktree is a full working copy. Four parallel agents on a 70 GB monorepo eat 280 GB of duplicated files just to keep them apart.
+The disk bill: every standard worktree is a full working copy. Four parallel agents on a 70 GB monorepo eat 280 GB of duplicated files just to keep them apart.
+
+And the merge bill: when two parallel PRs target the same base, you end up resolving conflicts by hand — re-reading code that someone (or some agent) wrote hours ago, in a different context, without knowing what either side was trying to accomplish.
 
 ## What worktwin does differently
 
@@ -25,6 +27,7 @@ And the disk bill: every standard worktree is a full working copy. Four parallel
 | Pushes branches and opens or updates PRs | no | no | yes |
 | Iterates in the same chat | no | no | yes |
 | 0 disk overhead per worker (light mode) | no | no | yes |
+| Intent-aware cross-PR merge-conflict resolver | no | no | yes |
 
 ## Light mode: 0-overhead worktrees
 
@@ -49,7 +52,20 @@ Light mode is automatic. `/worktwin` picks it whenever the filesystem allows, fa
 - git 2.38 or later (uses `git merge-tree --write-tree` for conflict detection)
 - Claude Code
 - `gh` CLI, optional, for automatic pull requests
-- `jq`, optional, for safer state file parsing
+- `jq`, optional for the core scripts, **required for `/worktwin-merge-solver` in the bash flavour**. The PowerShell flavour uses native `ConvertTo-Json` / `ConvertFrom-Json` and does not need `jq`. Cross-platform install:
+
+  | platform | command |
+  |---|---|
+  | macOS | `brew install jq` |
+  | Debian/Ubuntu | `sudo apt-get install jq` |
+  | Fedora/RHEL | `sudo dnf install jq` |
+  | Arch | `sudo pacman -S jq` |
+  | Alpine | `sudo apk add jq` |
+  | Windows (scoop) | `scoop install jq` |
+  | Windows (winget) | `winget install jqlang.jq` |
+  | Windows (choco) | `choco install jq` |
+
+  The installer detects missing `jq` and prints the matching hint at the end; the rest of worktwin still installs normally.
 
 ## Install
 
@@ -134,17 +150,29 @@ Three ways to wrap up, depending on what you want and what your workflow allows:
 /worktwin-finalize [<branch> ...]         # local only, no push, no PR
 ```
 
-`worktwin-ship` and `worktwin-ship-all` push the branches and open or update draft pull requests through `gh`. The agent reads the actual commits and diff and drafts a real PR title and body, matching the conventions it observes in the repo. No fixed template.
+`worktwin-ship` and `worktwin-ship-all` push the branches and open or update pull requests through `gh`. The agent reads the actual commits and diff and drafts a real PR title and body, matching the conventions it observes in the repo. No fixed template.
 
 `worktwin-ship` requires at least one branch argument on purpose, so a stray invocation never ships eight half-finished branches at once. Use `worktwin-ship-all` when you genuinely want the batch.
 
 `worktwin-finalize` does the same reporting job without the network: it shows what each worker did and prints the exact `git push` and `gh pr create` commands for you to run yourself when ready. Use it when `gh` is not available, when company policy forbids auto-PRs, or when you want to review locally before anything leaves your machine.
 
+None of the ship paths remove worktrees or state files. After a successful ship, the worker is still on disk so you can iterate further on the branch or hand it to `/worktwin-merge-solver` to resolve cross-PR conflicts with full context. When a worker is fully retired, drop it explicitly with `/worktwin-clear <branch>`.
+
+## Resolving cross-PR conflicts
+
+When two or more workers target the same base branch and their PRs collide, run:
+
+```
+/worktwin-merge-solver feat/auth feat/payments
+```
+
+The solver groups the branches by their target, detects real conflicts via `git merge-tree`, and for each conflicting group reads each worker's `WORKTWIN.md`, task, commits, and diff to understand intent. It then proposes a per-file resolution that honours both intents, asks you to confirm or override, and emits a single combined branch + PR with a synthesised title and body. PRs without conflicts stay independent. Original PRs are closed (with your confirmation) as "superseded by #N" so the local branches and history are preserved.
+
 ## Iterating in the same chat
 
 After `/worktwin`, the session is configured. Keep sending follow-up messages in the same chat: the agent stays on the same branch, commits as it goes, and the next ship call updates the existing PR instead of opening a duplicate.
 
-The rules also survive `/compact` and any new Claude Code session opened in the worktree, because worktwin writes them into the worktree's `CLAUDE.md` in a clearly marked block. Existing `CLAUDE.md` content is preserved.
+The rules also survive `/compact` and any new Claude Code session opened in the worktree. Worktwin writes the full rules into a `WORKTWIN.md` at the worktree root and appends a small `@WORKTWIN.md` reference block to the **bottom** of `CLAUDE.md`, so any branch-level `CLAUDE.md` (company rules, project standards) stays intact and takes priority. Both files are marked so they will never be committed: tracked files get `--skip-worktree`, untracked files get an entry in the per-worktree `info/exclude`.
 
 ## A real example
 
@@ -169,9 +197,19 @@ When the other three are also done, batch them out:
 /worktwin-ship-all
 ```
 
+If two or three of those PRs end up colliding on the same base — say `feat/dark-mode` and `chore/upgrade-react` both rewrote the root provider — collapse them into a single mergeable PR with full intent context:
+
+```
+/worktwin-merge-solver feat/dark-mode chore/upgrade-react
+```
+
+The solver reads each worker's `WORKTWIN.md` task, both diffs, and proposes a per-file resolution that honours both intents. You approve or override per file, it commits, pushes, and opens a combined PR; the originals get closed as "superseded by #N" only after your explicit confirmation.
+
 ## How it works
 
-Short version: `git worktree` for filesystem isolation, a state file in the shared `.git` directory for cross-worktree discovery, and a marked block in the worktree's `CLAUDE.md` so the rules persist across `/compact` and new sessions. The mechanical work runs through scripts in `bin/` so it is deterministic and testable; the skills are thin orchestrators that let the agent handle the judgement parts (drafting PRs, deciding on warnings).
+Short version: `git worktree` for filesystem isolation, a state file in the shared `.git` directory for cross-worktree discovery, a `WORKTWIN.md` at the worktree root with the parallel-worker rules, and a small `@WORKTWIN.md` reference appended at the bottom of `CLAUDE.md` so the rules layer on top of any existing project rules and persist across `/compact` and new sessions. Both files are kept out of git via `--skip-worktree` (tracked) or `info/exclude` (untracked). The mechanical work runs through scripts in `bin/` so it is deterministic and testable; the skills are thin orchestrators that let the agent handle the judgement parts (drafting PRs, resolving cross-PR conflicts, deciding on warnings).
+
+`/worktwin-merge-solver` is the same pattern: `bin/worktwin-merge-solver` exposes seven atomic subcommands (`discover`, `prepare`, `merge-step`, `finalize-step`, `push`, `open-pr`, `close-original`), each emitting JSON. The skill reads each worker's `WORKTWIN.md` plus per-file diffs, proposes resolutions, dialogues with you, and drives the subcommands in order. The combined branch is created off the latest `origin/<base>` so the resulting PR is a fast-forward, not a back-merge.
 
 Full breakdown in [docs/how-it-works.md](docs/how-it-works.md). Light mode details and OS-specific setup in [docs/light-mode.md](docs/light-mode.md). Comparison with other tools in [docs/vs-other-tools.md](docs/vs-other-tools.md). The `bin/` script contract in [docs/scripts.md](docs/scripts.md). Common issues in [docs/troubleshooting.md](docs/troubleshooting.md).
 
@@ -183,6 +221,7 @@ The `bin/` scripts work from any shell, not just from inside Claude Code. After 
 worktwin-init develop feat/auth "implement Google OAuth login"
 worktwin-list | jq -c 'select(.commits_ahead > 0)'
 worktwin-claude-md /path/to/worktree feat/auth develop "the task"
+worktwin-merge-solver discover feat/auth feat/payments | jq '.groups'
 ```
 
 Full contract and usage in [docs/scripts.md](docs/scripts.md).

@@ -38,6 +38,7 @@ $order = @(
     "worktwin-ship",
     "worktwin-ship-all",
     "worktwin-finalize",
+    "worktwin-merge-solver",
     "worktwin-clear",
     "worktwin-light-doctor",
     "worktwin-light-setup-windows",

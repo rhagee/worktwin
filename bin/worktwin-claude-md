@@ -1,22 +1,28 @@
 #!/usr/bin/env bash
-# worktwin-claude-md - write or update the worktwin rules block in a
-# worktree's CLAUDE.md. Idempotent. Preserves anything outside the block.
+# worktwin-claude-md - set up the worktwin parallel-worker context in a
+# worktree. Writes WORKTWIN.md with the full rules and task, appends a
+# small reference block to the bottom of CLAUDE.md, and marks both
+# files so git will not pick them up for commits.
 set -e
 
 usage() {
   cat <<'EOF'
 worktwin-claude-md <worktree-path> <branch> <from-branch> "<task>"
 
-Writes or updates the worktwin rules block in <worktree-path>/CLAUDE.md.
-The block is delimited by:
+Sets up the worktwin context inside <worktree-path>:
 
-  <!-- BEGIN worktwin -->
-  ...
-  <!-- END worktwin -->
+  WORKTWIN.md   full DO/DO NOT rules + bound branch + task
+  CLAUDE.md     original content preserved; appended at the bottom
+                with a small "<!-- BEGIN worktwin -->...<!-- END worktwin -->"
+                block that references @WORKTWIN.md
 
-Idempotent: running twice with the same arguments produces the same file.
-Any content outside the markers is preserved. Existing block is replaced
-in place.
+Then marks both files so git does not pick them up for commits:
+
+  - tracked file -> git update-index --skip-worktree
+  - untracked    -> added to the per-worktree info/exclude
+
+Idempotent: running twice with the same arguments produces the same
+file contents and exclude entries.
 
 Errors go to stderr, non-zero exit on failure. No stdout on success.
 EOF
@@ -39,19 +45,26 @@ if [ ! -d "$WORKTREE" ]; then
 fi
 
 CLAUDE_FILE="$WORKTREE/CLAUDE.md"
+WORKTWIN_FILE="$WORKTREE/WORKTWIN.md"
 BEGIN_MARKER="<!-- BEGIN worktwin -->"
 END_MARKER="<!-- END worktwin -->"
 
-write_block() {
-  cat <<EOF
-$BEGIN_MARKER
-# worktwin parallel worker rules
+write_worktwin_md() {
+  cat > "$WORKTWIN_FILE" <<EOF
+# worktwin parallel worker context
 
-This session is bound to branch \`$BRANCH\` in worktree \`$WORKTREE\`,
-based on \`$FROM\`. These rules apply for the whole session, every
-follow-up message, and any new Claude Code session opened in this directory.
+This worktree is bound to branch \`$BRANCH\` based on \`$FROM\`.
+Worktree path: \`$WORKTREE\`
 
-DO
+These rules apply for the whole session, every follow-up message,
+and any new Claude Code session opened in this directory.
+
+## Task
+
+$TASK
+
+## DO
+
 - Work only inside \`$WORKTREE\`.
 - Stay on branch \`$BRANCH\` for the entire session.
 - Make atomic commits with messages like \`feat(scope): description\`.
@@ -61,35 +74,113 @@ DO
   is empty and your progress is reflected in commits ahead of
   \`$FROM\`. The ship and finalize commands assume your branch is
   clean; never leave a dirty working tree behind.
-- If the user asks you to continue or iterate, keep working on the same branch.
+- If the user asks you to continue or iterate, keep working on the
+  same branch.
 
-DO NOT
+## DO NOT
+
 - Run \`git checkout\` or \`git switch\` to a different branch.
 - Modify files outside \`$WORKTREE\`.
 - Run \`git merge\` or \`git rebase\` unless the user explicitly asks.
 - Delete the \`parallel/\` state files.
 - Push to any branch other than \`$BRANCH\`.
 
-Task: $TASK
+## Hard rule: do not commit worktwin context files
+
+\`CLAUDE.md\` in this worktree has been appended with a worktwin
+reference block, and \`WORKTWIN.md\` is a worktwin-local file. Both
+are local-only context and must NEVER be committed.
+
+- If the user explicitly asks to commit either file, FIRST warn that
+  \`CLAUDE.md\` references a local worktwin context file
+  (\`WORKTWIN.md\`) that only exists in this worktree, and confirm
+  the user really wants to commit the local override before
+  proceeding.
+- Otherwise, treat both files as untouchable from git's perspective.
+EOF
+}
+
+claude_tail_block() {
+  cat <<EOF
+$BEGIN_MARKER
+This worktree is a worktwin parallel worker. The parallel-worker
+rules, the bound branch, and the current task live in \`WORKTWIN.md\`
+at the worktree root. Those rules apply on top of everything above.
+
+@WORKTWIN.md
+
+Hard rule: do NOT commit changes to \`CLAUDE.md\` or \`WORKTWIN.md\`.
+If the user explicitly asks to commit either, warn first that
+\`CLAUDE.md\` contains a local worktwin reference block and
+\`WORKTWIN.md\` is a local-only context file.
 $END_MARKER
 EOF
 }
 
-if [ -f "$CLAUDE_FILE" ]; then
-  REST=$(awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
-    $0 == b { skip=1; next }
-    $0 == e { skip=0; next }
-    !skip
-  ' "$CLAUDE_FILE")
-  # Strip leading blank lines from the surviving content
-  REST=$(printf '%s\n' "$REST" | awk 'NF || started { started=1; print }')
-  {
-    write_block
-    if [ -n "$REST" ]; then
-      printf '\n%s\n' "$REST"
-    fi
-  } > "$CLAUDE_FILE.tmp"
-  mv "$CLAUDE_FILE.tmp" "$CLAUDE_FILE"
-else
-  write_block > "$CLAUDE_FILE"
-fi
+update_claude_md() {
+  if [ -f "$CLAUDE_FILE" ]; then
+    # Strip any existing worktwin block (could be anywhere in the file).
+    REST=$(awk -v b="$BEGIN_MARKER" -v e="$END_MARKER" '
+      $0 == b { skip=1; next }
+      $0 == e { skip=0; next }
+      !skip
+    ' "$CLAUDE_FILE")
+    # Trim trailing blank lines from REST so the appended block sits
+    # right after the original content with exactly one blank line.
+    REST=$(printf '%s\n' "$REST" | awk '
+      { lines[NR]=$0 }
+      END {
+        last=NR
+        while (last>0 && lines[last] ~ /^[[:space:]]*$/) last--
+        for (i=1;i<=last;i++) print lines[i]
+      }
+    ')
+    {
+      if [ -n "$REST" ]; then
+        printf '%s\n\n' "$REST"
+      fi
+      claude_tail_block
+    } > "$CLAUDE_FILE.tmp"
+    mv "$CLAUDE_FILE.tmp" "$CLAUDE_FILE"
+  else
+    claude_tail_block > "$CLAUDE_FILE"
+  fi
+}
+
+is_tracked() {
+  git -C "$WORKTREE" ls-files --error-unmatch -- "$1" >/dev/null 2>&1
+}
+
+add_to_exclude() {
+  local entry="$1" exclude_rel exclude_file
+  exclude_rel=$(git -C "$WORKTREE" rev-parse --git-path info/exclude 2>/dev/null || true)
+  if [ -z "$exclude_rel" ]; then return 0; fi
+  case "$exclude_rel" in
+    /*|[A-Za-z]:[\\/]*) exclude_file="$exclude_rel" ;;
+    *) exclude_file="$WORKTREE/$exclude_rel" ;;
+  esac
+  mkdir -p "$(dirname "$exclude_file")" 2>/dev/null || true
+  if [ -f "$exclude_file" ] && grep -qxF "$entry" "$exclude_file" 2>/dev/null; then
+    return 0
+  fi
+  printf '%s\n' "$entry" >> "$exclude_file"
+}
+
+mark_no_commit() {
+  local rel="$1"
+  # Skip silently if we are not inside a git repo (lets the script be
+  # exercised against plain directories in tests).
+  if ! git -C "$WORKTREE" rev-parse --git-dir >/dev/null 2>&1; then
+    return 0
+  fi
+  if is_tracked "$rel"; then
+    git -C "$WORKTREE" update-index --skip-worktree -- "$rel" 2>/dev/null || true
+  else
+    add_to_exclude "/$rel"
+  fi
+}
+
+write_worktwin_md
+update_claude_md
+mark_no_commit "CLAUDE.md"
+mark_no_commit "WORKTWIN.md"
