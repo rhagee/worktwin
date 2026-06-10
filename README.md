@@ -18,16 +18,21 @@ And the merge bill: when two parallel PRs target the same base, you end up resol
 
 ## What worktwin does differently
 
-| | `claude --worktree` | `gtr` (CodeRabbit) | worktwin |
-|---|---|---|---|
-| Creates a worktree | yes | yes | yes |
-| Instructs the agent | no | no | yes |
-| Tracks active workers | no | no | yes |
-| Real conflict detection (not just file overlap) | no | no | yes |
-| Pushes branches and opens or updates PRs | no | no | yes |
-| Iterates in the same chat | no | no | yes |
-| 0 disk overhead per worker (light mode) | no | no | yes |
-| Intent-aware cross-PR merge-conflict resolver | no | no | yes |
+| | `claude --worktree` | `gtr` (CodeRabbit) | other CoW-worktree tools | worktwin |
+|---|---|---|---|---|
+| Creates a worktree | yes | yes | yes | yes |
+| Instructs the agent (rules survive `/compact`) | no | no | no | yes |
+| Tracks active workers cross-session | no | no | no | yes |
+| Real conflict detection (not just file overlap) | no | no | no | yes |
+| Pushes branches + opens / updates PRs | no | no | no | yes |
+| Iterates in the same chat | no | no | no | yes |
+| 0 disk overhead per worker (CoW reflink) | no | no | yes | yes |
+| Auto-discovers a CoW volume when the main is on NTFS | no | no | no | yes |
+| Per-source-branch base, parallel spawns race-free | no | no | no | yes |
+| Reference-counted cleanup of the CoW base | no | no | no | yes |
+| Intent-aware cross-PR merge-conflict resolver | no | no | no | yes |
+
+To my knowledge there is no other tool in the Claude Code ecosystem that combines automatic Dev Drive discovery, per-source-branch CoW bases, race-free parallel multi-source-branch spawning, intent-aware merge-conflict resolution, and rule persistence in the agent's `CLAUDE.md`. If something equivalent ships, the comparison table will be updated.
 
 ## Light mode: 0-overhead worktrees
 
@@ -45,6 +50,28 @@ On filesystems that support copy-on-write file cloning, worktwin spawns each wor
 | Windows | NTFS only | no, create a Dev Drive (see below) |
 
 Run `/worktwin-light-doctor` inside Claude Code to find out where your machine sits. On Windows without a Dev Drive, `/worktwin-light-setup-windows` walks you through creating one (admin required, ~100 GB recommended). The Windows Dev Drive path is validated live on Windows 11 25H2 with a 200 GB ReFS volume.
+
+### What it actually costs you on disk
+
+The promised "0 disk overhead per worker" is true only for workers themselves. The per-source-branch base costs something, depending on which case applies:
+
+| Case | Base storage cost | Worker storage cost |
+|---|---|---|
+| Main on CoW filesystem, `HEAD == FROM_REF` | ~0 bytes (CoW reflink from main) | ~0 bytes (CoW reflink from base, same volume) |
+| Main on CoW filesystem, `HEAD != FROM_REF` | `delta(HEAD, FROM_REF)` — only the files that differ between the two commits are rewritten and break the CoW | ~0 bytes |
+| Main on NTFS, base on Dev Drive (cross-volume) | 1× working-tree size of the main, **without `.git`** (the base is a linked worktree, so the git object store stays on the main) | ~0 bytes |
+
+So the total extra storage worktwin adds on top of your main checkout is:
+
+```
+extra = Σ_basis  cost(base_i)  +  Σ_workers  changes_made_by_agent
+```
+
+where `cost(base_i)` is the row above. The bases are auto-removed by `/worktwin-clear` when their last worker disappears, so the budget is paid only while work is in flight.
+
+Example: 70 GB main on NTFS (50 GB working tree, 20 GB `.git`), 5 agents spawning from `main`, 3 agents from `release/1.4` — total extra = 2 × 50 GB = 100 GB on the Dev Drive, plus a few hundred MB of agent-side edits. Versus a naive "one full copy per worker" baseline of 8 × 70 GB = 560 GB. The Dev Drive becomes empty when all 8 workers are cleared.
+
+### How light mode picks the base location
 
 Light mode is **fully automatic**, on every supported filesystem. On the first `/worktwin` spawn from a given source branch worktwin auto-creates a per-source-branch base **as a linked git worktree** of the main repo (detached HEAD, shares the main's git object store, no second `.git`). The base sits next to the main on the same volume when the main is on a CoW filesystem (its working tree is CoW-reflinked from the main, so the base itself costs ~0 bytes when main HEAD already matches the source branch), or on the Dev Drive when the main is on NTFS. Either way, every worker spawned from that source branch is a CoW reflink from the base. Spawning in parallel from `main` and `release/1.4` writes to two different bases, so there is no race on `git reset --hard FROM_REF` between source branches. When `/worktwin-clear` removes the last worker tied to a given base, that base is removed too, so the `.worktwin-bases` directory ends up empty when no work is in flight. Zero config: you keep your main checkout where you want it, and the parallel work happens on a CoW-capable volume. If you ever need to override, tell the agent to "force light" or "force heavy" and the skill will pass `--force-light` or `--force-heavy` to `worktwin-init`. The output JSON reports which path was used. Full details in [docs/light-mode.md](docs/light-mode.md).
 
