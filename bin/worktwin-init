@@ -130,16 +130,33 @@ if [ "$LIGHT_MODE" != "off" ]; then
     fi
   fi
 
-  # Auto-discovery: when the main repo lives on a non-CoW filesystem
-  # (Windows NTFS is the common case) but a Dev Drive exists on the
-  # system, create an implicit base on the Dev Drive on first spawn and
-  # reuse it from then on. Zero config: the user does not have to know
-  # about light-base, they just run /worktwin and worktrees land on the
-  # Dev Drive with CoW reflinks automatically.
+  # Auto-discovery: always try to provision an implicit base for the
+  # pair (repo, from_branch). The base lives:
+  #   * alongside the main repo when the main is on a CoW filesystem
+  #     (macOS APFS, Linux btrfs/XFS, Windows main on ReFS) -> the
+  #     base itself is created via CoW reflink from the main, so the
+  #     base costs ~0 bytes when main HEAD already matches FROM_REF
+  #     and only the delta when it does not. This guarantees Case 1
+  #     (CoW main) is at least as cheap as Case 2 (cross-volume).
+  #   * on a Dev Drive when the main is on a non-CoW filesystem
+  #     (Windows NTFS being the common case) -> the base is one full
+  #     working-tree checkout per active from_branch (a one-time cost
+  #     per source branch, freed automatically when the last worker
+  #     is cleared).
+  # In both cases, workers off the same from_branch CoW-reflink from
+  # the base; parallel spawns from different from_branches write to
+  # different bases, so there is no race on `git reset --hard FROM_REF`.
   if [ -z "$LIGHT_BASE_PATH" ] || [ ! -d "$LIGHT_BASE_PATH" ]; then
     LIGHT_BASE_PATH=""
+    BASE_KIND=""
+    FROM_BRANCH_SLUG=$(echo "$FROM_BRANCH" | sed 's|[^a-zA-Z0-9._-]|-|g')
     MAIN_COW=$(check_cow_capable "$MAIN_REPO")
-    if [ "$MAIN_COW" != "true" ]; then
+
+    AUTO_BASE_PARENT=""
+    if [ "$MAIN_COW" = "true" ]; then
+      AUTO_BASE_PARENT="$(dirname "$MAIN_REPO")/.worktwin-bases"
+      BASE_KIND="same-volume"
+    else
       DEV_DRIVE_LETTER=""
       case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
@@ -149,47 +166,50 @@ if [ "$LIGHT_MODE" != "off" ]; then
           ;;
       esac
       if [ -n "$DEV_DRIVE_LETTER" ]; then
-        # The base is per (repo, from_branch). Two workers spawned
-        # against different source branches in parallel write to
-        # different base worktrees, so there is no race on
-        # `git reset --hard FROM_REF` and no cross-source-branch
-        # contamination. The price: one base worktree per active
-        # from_branch instead of one per repo, but they are paid for
-        # only while at least one worker depends on them and removed
-        # automatically when the last one goes away.
-        FROM_BRANCH_SLUG=$(echo "$FROM_BRANCH" | sed 's|[^a-zA-Z0-9._-]|-|g')
         AUTO_BASE_PARENT="/${DEV_DRIVE_LETTER}/.worktwin-bases"
-        AUTO_BASE_PATH="$AUTO_BASE_PARENT/${REPO_NAME}__${FROM_BRANCH_SLUG}"
-        mkdir -p "$AUTO_BASE_PARENT" 2>/dev/null || true
+        BASE_KIND="cross-volume"
+      fi
+    fi
 
-        # The base is a linked git worktree of the main repo, not a
-        # full clone. No second .git database on disk; the base shares
-        # the main's object store transparently. Detached HEAD on the
-        # base avoids reserving a branch name for bookkeeping.
-        BASE_REGISTERED=false
-        if [ -d "$AUTO_BASE_PATH" ] && \
-           git -C "$MAIN_REPO" worktree list --porcelain 2>/dev/null \
-             | grep -qx "worktree $AUTO_BASE_PATH"; then
-          BASE_REGISTERED=true
+    if [ -n "$AUTO_BASE_PARENT" ]; then
+      AUTO_BASE_PATH="$AUTO_BASE_PARENT/${REPO_NAME}__${FROM_BRANCH_SLUG}"
+      mkdir -p "$AUTO_BASE_PARENT" 2>/dev/null || true
+
+      BASE_REGISTERED=false
+      if [ -d "$AUTO_BASE_PATH" ] && \
+         git -C "$MAIN_REPO" worktree list --porcelain 2>/dev/null \
+           | grep -qx "worktree $AUTO_BASE_PATH"; then
+        BASE_REGISTERED=true
+      fi
+
+      if [ "$BASE_REGISTERED" = "false" ]; then
+        if [ -e "$AUTO_BASE_PATH" ]; then
+          rm -rf "$AUTO_BASE_PATH" 2>/dev/null || true
         fi
-
-        if [ "$BASE_REGISTERED" = "false" ]; then
-          if [ -e "$AUTO_BASE_PATH" ]; then
-            # Stale directory not registered as a worktree - clean it.
-            rm -rf "$AUTO_BASE_PATH" 2>/dev/null || true
-          fi
-          WARNINGS+=("first spawn from '${FROM_BRANCH}' for this repo on Dev Drive ${DEV_DRIVE_LETTER}: - creating a base worktree at $AUTO_BASE_PATH (one-time cost per source branch, removed automatically when the last worker is cleared)")
-          if ! git -C "$MAIN_REPO" worktree add --detach --quiet "$AUTO_BASE_PATH" "$FROM_REF" 2>/dev/null; then
+        if [ "$BASE_KIND" = "same-volume" ]; then
+          WARNINGS+=("first spawn from '${FROM_BRANCH}': creating same-volume CoW base at $AUTO_BASE_PATH (auto-removed when the last worker is cleared)")
+          if git -C "$MAIN_REPO" worktree add --no-checkout --detach --quiet "$AUTO_BASE_PATH" "$FROM_REF" 2>/dev/null; then
+            "$LIGHT_CLONE" "$MAIN_REPO" "$AUTO_BASE_PATH" 2>/dev/null || true
+            git -C "$AUTO_BASE_PATH" checkout HEAD -- . 2>/dev/null || \
+              git -C "$AUTO_BASE_PATH" read-tree --reset HEAD 2>/dev/null || true
+            BASE_REGISTERED=true
+          else
             WARNINGS+=("auto base worktree creation failed; falling back to standard worktree")
             rm -rf "$AUTO_BASE_PATH" 2>/dev/null || true
-          else
+          fi
+        else
+          WARNINGS+=("first spawn from '${FROM_BRANCH}' for this repo on Dev Drive ${DEV_DRIVE_LETTER}: - creating a base worktree at $AUTO_BASE_PATH (one-time cost per source branch, auto-removed when the last worker is cleared)")
+          if git -C "$MAIN_REPO" worktree add --detach --quiet "$AUTO_BASE_PATH" "$FROM_REF" 2>/dev/null; then
             BASE_REGISTERED=true
+          else
+            WARNINGS+=("auto base worktree creation failed; falling back to standard worktree")
+            rm -rf "$AUTO_BASE_PATH" 2>/dev/null || true
           fi
         fi
+      fi
 
-        if [ "$BASE_REGISTERED" = "true" ]; then
-          LIGHT_BASE_PATH="$AUTO_BASE_PATH"
-        fi
+      if [ "$BASE_REGISTERED" = "true" ]; then
+        LIGHT_BASE_PATH="$AUTO_BASE_PATH"
       fi
     fi
   fi
@@ -210,13 +230,16 @@ if [ "$LIGHT_MODE" != "off" ]; then
         LIGHT_ACTIVE=true
         LIGHT_REASON="same-volume CoW from main repo"
       else
-        LIGHT_REASON="main repo is not on $FROM_BRANCH, cannot CoW from it (use a light base or check out $FROM_BRANCH on main)"
+        LIGHT_REASON="main repo is not on $FROM_BRANCH and base creation failed"
       fi
     else
-      if git -C "$CLONE_SOURCE" fetch --quiet 2>/dev/null; then :; fi
       if git -C "$CLONE_SOURCE" reset --hard "$FROM_REF" --quiet 2>/dev/null; then
         LIGHT_ACTIVE=true
-        LIGHT_REASON="cross-volume CoW from configured light base"
+        case "${BASE_KIND:-}" in
+          same-volume)  LIGHT_REASON="same-volume CoW via auto base worktree" ;;
+          cross-volume) LIGHT_REASON="cross-volume CoW from auto base on Dev Drive" ;;
+          *)            LIGHT_REASON="cross-volume CoW from configured light base" ;;
+        esac
       else
         LIGHT_REASON="could not sync light base to $FROM_REF"
       fi
