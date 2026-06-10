@@ -41,11 +41,12 @@ On filesystems that support copy-on-write file cloning, worktwin spawns each wor
 | Linux | ZFS | yes with `block_cloning` (OpenZFS 2.2+, kernel 5.3+) |
 | Linux | ext4 | no, switch to btrfs or XFS |
 | Windows | ReFS Dev Drive | yes, Windows 11 22H2+ |
-| Windows | NTFS | no, create a Dev Drive (see below) |
+| Windows | NTFS main + ReFS Dev Drive on another volume | yes, auto-discovered (see below) |
+| Windows | NTFS only | no, create a Dev Drive (see below) |
 
 Run `/worktwin-light-doctor` inside Claude Code to find out where your machine sits. On Windows without a Dev Drive, `/worktwin-light-setup-windows` walks you through creating one (admin required, ~100 GB recommended). The Windows Dev Drive path is validated live on Windows 11 25H2 with a 200 GB ReFS volume.
 
-Light mode is automatic. `/worktwin` picks it whenever the filesystem allows, falls back silently to standard worktrees otherwise. If you ever need to override, tell the agent to "force light" or "force heavy" and the skill will pass `--force-light` or `--force-heavy` to `worktwin-init`. The output JSON reports which path was used. Full details in [docs/light-mode.md](docs/light-mode.md).
+Light mode is **fully automatic**, including the cross-volume case. If your main checkout sits on NTFS but the machine has a Dev Drive (ReFS) on another letter, worktwin detects it on the first `/worktwin` spawn for that repo, clones the main repo once to `<dev-drive>:\.worktwin-bases\<repo-name>` (a one-time cost), and points every worktree at the Dev Drive with CoW reflinks from then on. Zero config: you keep your main checkout where you want it, and the parallel work happens on the fast volume. If you ever need to override, tell the agent to "force light" or "force heavy" and the skill will pass `--force-light` or `--force-heavy` to `worktwin-init`. The output JSON reports which path was used. Full details in [docs/light-mode.md](docs/light-mode.md).
 
 ## Requirements
 

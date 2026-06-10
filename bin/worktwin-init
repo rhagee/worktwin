@@ -130,6 +130,45 @@ if [ "$LIGHT_MODE" != "off" ]; then
     fi
   fi
 
+  # Auto-discovery: when the main repo lives on a non-CoW filesystem
+  # (Windows NTFS is the common case) but a Dev Drive exists on the
+  # system, create an implicit base on the Dev Drive on first spawn and
+  # reuse it from then on. Zero config: the user does not have to know
+  # about light-base, they just run /worktwin and worktrees land on the
+  # Dev Drive with CoW reflinks automatically.
+  if [ -z "$LIGHT_BASE_PATH" ] || [ ! -d "$LIGHT_BASE_PATH" ]; then
+    LIGHT_BASE_PATH=""
+    MAIN_COW=$(check_cow_capable "$MAIN_REPO")
+    if [ "$MAIN_COW" != "true" ]; then
+      DEV_DRIVE_LETTER=""
+      case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+          DEV_DRIVE_LETTER=$(powershell -NoProfile -ExecutionPolicy Bypass -Command \
+            "Get-Volume -ErrorAction SilentlyContinue | Where-Object { \$_.FileSystem -eq 'ReFS' -and \$_.DriveLetter } | Select-Object -First 1 -ExpandProperty DriveLetter" \
+            2>/dev/null | tr -d '\r\n ' | tr '[:upper:]' '[:lower:]')
+          ;;
+      esac
+      if [ -n "$DEV_DRIVE_LETTER" ]; then
+        AUTO_BASE_PARENT="/${DEV_DRIVE_LETTER}/.worktwin-bases"
+        AUTO_BASE_PATH="$AUTO_BASE_PARENT/$REPO_NAME"
+        mkdir -p "$AUTO_BASE_PARENT" 2>/dev/null || true
+        if [ ! -d "$AUTO_BASE_PATH/.git" ]; then
+          WARNINGS+=("first spawn for this repo on Dev Drive ${DEV_DRIVE_LETTER}: - auto-cloning the main repo to $AUTO_BASE_PATH (one-time cost)")
+          if ! git clone --quiet "$MAIN_REPO" "$AUTO_BASE_PATH" 2>/dev/null; then
+            WARNINGS+=("auto-clone to Dev Drive failed; falling back to standard worktree")
+            rm -rf "$AUTO_BASE_PATH" 2>/dev/null || true
+          fi
+        fi
+        if [ -d "$AUTO_BASE_PATH/.git" ]; then
+          LIGHT_BASE_PATH="$AUTO_BASE_PATH"
+          if [ -x "$LIGHT_BASE_TOOL" ] && command -v jq >/dev/null 2>&1; then
+            "$LIGHT_BASE_TOOL" set "$MAIN_REPO" "$AUTO_BASE_PATH" >/dev/null 2>&1 || true
+          fi
+        fi
+      fi
+    fi
+  fi
+
   if [ -n "$LIGHT_BASE_PATH" ] && [ -d "$LIGHT_BASE_PATH" ]; then
     CLONE_SOURCE="$LIGHT_BASE_PATH"
     WORKTREE_PATH="$(dirname "$LIGHT_BASE_PATH")/$(basename "$LIGHT_BASE_PATH")--${BRANCH_SLUG}"
