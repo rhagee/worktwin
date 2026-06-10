@@ -29,7 +29,7 @@ In plain words, tell the user:
 - The VHDX is dynamic: it consumes only the space actually used, up to the cap. Default cap is 100 GB.
 - The VHDX is mounted as a new drive letter (default `D:`). The new drive is formatted as ReFS with Dev Drive optimisations.
 - A scheduled task is registered to re-mount the VHDX automatically at every system startup. Without this the Dev Drive would silently disappear after a reboot. The task runs as SYSTEM and only mounts the VHDX if the file still exists and is not already attached.
-- The operation needs an elevated PowerShell. If they are not already in one, they have to relaunch and rerun.
+- Admin rights are required, but the user does NOT need to relaunch PowerShell as admin. The script self-elevates via UAC: a Windows prompt appears, the user clicks "Yes", and the setup runs in a new admin window that pauses at the end so the user can read the log.
 - Nothing on existing volumes is touched.
 
 ## 3. Collect parameters from the user
@@ -68,7 +68,7 @@ Show the output to the user verbatim. The dry run does pre-flight checks (Window
 If pre-flight fails, surface the reason. Common failures:
 
 - Not Windows 11 22H2+ -> Dev Drive is not supported on this OS; user has to upgrade or use the standard worktwin flow.
-- Not admin -> tell them to relaunch PowerShell as Administrator and re-invoke this skill.
+- Not admin -> usually does not happen anymore (the script auto-elevates via UAC). If it still does, the user denied the UAC prompt; tell them to re-run and click 'Yes'.
 - Drive letter taken -> ask for a different letter.
 - VHDX path exists -> ask for a different path.
 - Not enough free space -> ask for a smaller size or a different VHDX location.

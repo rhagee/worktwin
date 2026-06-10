@@ -42,7 +42,8 @@ param(
     [switch]$KeepFile,
     [switch]$DeleteFile,
     [switch]$NonInteractive,
-    [switch]$RegisterAutoMountOnly
+    [switch]$RegisterAutoMountOnly,
+    [switch]$NoElevate
 )
 
 function Fail($msg) {
@@ -60,13 +61,47 @@ function Confirm-Or-Skip($prompt) {
     return ($ans -eq 'yes')
 }
 
-# Pre-flight: admin
-Step "Pre-flight: admin rights"
-$isAdmin = ([Security.Principal.WindowsPrincipal] `
+function Test-IsAdmin {
+    return ([Security.Principal.WindowsPrincipal] `
             [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(`
             [Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Fail "this script must run from an elevated PowerShell. Right-click PowerShell -> Run as Administrator."
+}
+
+# Auto-elevation: same UAC trick as worktwin-light-setup-windows.ps1.
+# Run from any plain PowerShell, click Yes on the prompt, and the
+# elevated child does the work in a new window. -NoElevate prevents
+# recursion; -NonInteractive disables the prompt (CI use only).
+if (-not (Test-IsAdmin) -and -not $NoElevate) {
+    if ($NonInteractive) {
+        Fail "this script needs admin rights and -NonInteractive disables UAC self-elevation. Run from an elevated PowerShell, or omit -NonInteractive to trigger the UAC prompt."
+    }
+    Write-Host ">> Not running as admin. Asking Windows to elevate (UAC prompt incoming)..." -ForegroundColor Cyan
+    Write-Host "   Click 'Yes' on the Windows prompt. The teardown will run in a new admin window." -ForegroundColor Gray
+
+    $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-File', "`"$($MyInvocation.MyCommand.Path)`"", '-NoElevate')
+    foreach ($k in $PSBoundParameters.Keys) {
+        $v = $PSBoundParameters[$k]
+        if ($v -is [System.Management.Automation.SwitchParameter]) {
+            if ($v.IsPresent) { $argList += "-$k" }
+        } else {
+            $argList += "-$k"
+            $argList += "`"$v`""
+        }
+    }
+
+    try {
+        $proc = Start-Process powershell.exe -ArgumentList $argList -Verb RunAs -Wait -PassThru -ErrorAction Stop
+        Write-Host ">> Elevated teardown finished (exit code $($proc.ExitCode))." -ForegroundColor Cyan
+        exit $proc.ExitCode
+    } catch {
+        Fail "UAC elevation was denied or failed. Re-run and accept the prompt, or launch PowerShell as Administrator manually."
+    }
+}
+
+# Sanity check (we should be admin now)
+Step "Pre-flight: admin rights"
+if (-not (Test-IsAdmin)) {
+    Fail "still not running with admin rights after elevation attempt. Aborting."
 }
 Ok "running with admin rights"
 
@@ -137,6 +172,10 @@ if ($RegisterAutoMountOnly) {
     }
     Write-Host ""
     Write-Host "Reboot once to verify the task brings the Dev Drive back automatically." -ForegroundColor Green
+    if ($NoElevate -and -not $NonInteractive) {
+        Write-Host ""
+        Read-Host "Press Enter to close this window"
+    }
     exit 0
 }
 
@@ -202,3 +241,9 @@ if (Test-Path -LiteralPath $VhdPath) {
 
 Write-Host ""
 Ok "teardown complete"
+
+# If we are the elevated child, pause so the user can read.
+if ($NoElevate -and -not $NonInteractive) {
+    Write-Host ""
+    Read-Host "Press Enter to close this window"
+}

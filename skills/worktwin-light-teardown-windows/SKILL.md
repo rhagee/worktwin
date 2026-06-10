@@ -49,7 +49,7 @@ If the user does not pass a path, run the script with no `-VhdPath` so it auto-d
 
 ## 5. Run the script
 
-The script requires admin. If the user's shell is not elevated, tell them to relaunch PowerShell as Administrator and re-invoke this skill.
+The script needs admin but self-elevates: it triggers a UAC prompt when invoked from a normal shell, runs the teardown in a new admin window, and pauses so the user can read the log. The user just clicks "Yes" on the Windows prompt.
 
 **Repair (recover an older install):**
 

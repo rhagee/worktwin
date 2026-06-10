@@ -39,7 +39,8 @@ param(
     [string]$DriveLetter,
     [switch]$DryRun,
     [switch]$NonInteractive,
-    [switch]$SkipAutoMountTask
+    [switch]$SkipAutoMountTask,
+    [switch]$NoElevate
 )
 
 function Fail($msg) {
@@ -60,6 +61,45 @@ function Confirm-Or-Exit($prompt) {
     }
 }
 
+# Auto-elevation: a Dev Drive needs admin to create. Triggering UAC from
+# inside the script means the user can launch it from any plain
+# PowerShell - no "right-click, Run as Administrator" gymnastics. The
+# elevated child runs the same script with -NoElevate, so we do not
+# loop. Pause at the end (handled below) so the auto-spawned window
+# stays open long enough to read the log.
+function Test-IsAdmin {
+    return ([Security.Principal.WindowsPrincipal] `
+            [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(`
+            [Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-not (Test-IsAdmin) -and -not $NoElevate) {
+    if ($NonInteractive) {
+        Fail "this script needs admin rights and -NonInteractive disables UAC self-elevation. Run from an elevated PowerShell, or omit -NonInteractive to trigger the UAC prompt."
+    }
+    Write-Host ">> Not running as admin. Asking Windows to elevate (UAC prompt incoming)..." -ForegroundColor Cyan
+    Write-Host "   Click 'Yes' on the Windows prompt. The setup will run in a new admin window." -ForegroundColor Gray
+
+    $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-File', "`"$($MyInvocation.MyCommand.Path)`"", '-NoElevate')
+    foreach ($k in $PSBoundParameters.Keys) {
+        $v = $PSBoundParameters[$k]
+        if ($v -is [System.Management.Automation.SwitchParameter]) {
+            if ($v.IsPresent) { $argList += "-$k" }
+        } else {
+            $argList += "-$k"
+            $argList += "`"$v`""
+        }
+    }
+
+    try {
+        $proc = Start-Process powershell.exe -ArgumentList $argList -Verb RunAs -Wait -PassThru -ErrorAction Stop
+        Write-Host ">> Elevated setup finished (exit code $($proc.ExitCode))." -ForegroundColor Cyan
+        exit $proc.ExitCode
+    } catch {
+        Fail "UAC elevation was denied or failed. Re-run and accept the prompt, or launch PowerShell as Administrator manually."
+    }
+}
+
 # Pre-flight: OS version
 Step "Pre-flight: Windows version"
 $build = [System.Environment]::OSVersion.Version.Build
@@ -69,13 +109,10 @@ if ($build -lt 22621) {
 }
 Ok "Windows version is sufficient"
 
-# Pre-flight: admin
+# Pre-flight: admin (sanity check - we should be admin by now)
 Step "Pre-flight: admin rights"
-$isAdmin = ([Security.Principal.WindowsPrincipal] `
-            [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(`
-            [Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Fail "this script must run from an elevated PowerShell. Right-click PowerShell -> Run as Administrator."
+if (-not (Test-IsAdmin)) {
+    Fail "still not running with admin rights after elevation attempt. Aborting."
 }
 Ok "running with admin rights"
 
@@ -295,3 +332,11 @@ Write-Host "  or, manually:" -ForegroundColor Gray
 Write-Host "    Unregister-ScheduledTask -TaskName 'worktwin-mount-$([IO.Path]::GetFileNameWithoutExtension($VhdPath))' -Confirm:`$false" -ForegroundColor Gray
 Write-Host "    Dismount-VHD -Path '$VhdPath'" -ForegroundColor Gray
 Write-Host "    Remove-Item '$VhdPath'" -ForegroundColor Gray
+
+# If we are the elevated child (spawned via UAC), the parent terminal is
+# unaware of our output - this is a new window that would close on exit.
+# Pause so the user can read the log.
+if ($NoElevate -and -not $NonInteractive) {
+    Write-Host ""
+    Read-Host "Press Enter to close this window"
+}

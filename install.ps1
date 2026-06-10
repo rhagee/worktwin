@@ -1,7 +1,8 @@
 #Requires -Version 5.1
 
 param(
-    [string]$Mode = "global"
+    [string]$Mode = "global",
+    [switch]$SkipDevDriveSetup
 )
 
 switch ($Mode) {
@@ -96,5 +97,124 @@ if (-not $jq -and ($gitBash -or $wsl)) {
         Write-Host "      install: choco install jq"
     } else {
         Write-Host "      install with scoop / winget / choco, e.g.: scoop install jq"
+    }
+}
+
+# -----------------------------------------------------------------------
+# Guided Dev Drive setup (Windows only, only when there is no ReFS volume
+# yet). Skip with -SkipDevDriveSetup or by answering "no" to the prompt.
+# -----------------------------------------------------------------------
+if ($SkipDevDriveSetup) {
+    # silent
+} elseif (-not [Environment]::OSVersion.Platform.ToString().StartsWith('Win')) {
+    # not Windows, nothing to do
+} else {
+    $existingDev = $null
+    try {
+        $existingDev = Get-Volume -ErrorAction SilentlyContinue |
+            Where-Object { $_.FileSystem -eq 'ReFS' -and $_.DriveLetter } |
+            Select-Object -First 1
+    } catch { }
+
+    if ($existingDev) {
+        Write-Host ""
+        Write-Host "note: ReFS volume already present at $($existingDev.DriveLetter): - light mode is available." -ForegroundColor Green
+    } elseif ([Console]::IsInputRedirected) {
+        # non-interactive shell (CI, piped) - cannot prompt
+        Write-Host ""
+        Write-Host "note: no ReFS Dev Drive detected. Run /worktwin-light-setup-windows inside Claude Code (or .\bin\worktwin-light-setup-windows.ps1) to set up light mode." -ForegroundColor Gray
+    } else {
+        Write-Host ""
+        Write-Host "==================================================================="  -ForegroundColor Cyan
+        Write-Host "  worktwin light mode setup (optional)"                                -ForegroundColor Cyan
+        Write-Host "==================================================================="  -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "Light mode gives each parallel worker ~0 bytes of disk overhead via"  -ForegroundColor Gray
+        Write-Host "filesystem copy-on-write. On Windows this needs a ReFS Dev Drive."    -ForegroundColor Gray
+        Write-Host "If you skip, worktwin still works with standard worktrees (full file" -ForegroundColor Gray
+        Write-Host "copies per worker)."                                                   -ForegroundColor Gray
+        Write-Host ""
+        $answer = Read-Host "Set up a Dev Drive now? (yes/no, default: no)"
+
+        if ($answer -ne 'yes') {
+            Write-Host ""
+            Write-Host "Skipped. Set up later with:"  -ForegroundColor Gray
+            Write-Host "  /worktwin-light-setup-windows   (inside Claude Code, guided)" -ForegroundColor Gray
+            Write-Host "  $Target\worktwin\bin\worktwin-light-setup-windows.ps1" -ForegroundColor Gray
+        } else {
+            # Sorgenti possibili: dischi NTFS con almeno 50 GB liberi.
+            $candidates = Get-PSDrive -PSProvider FileSystem |
+                Where-Object { $_.Free -ge 50GB -and ($_.Name -match '^[A-Z]$') } |
+                Sort-Object Free -Descending
+
+            if ($candidates.Count -eq 0) {
+                Write-Host ""
+                Write-Host "no disk with at least 50 GB free was found. Free some space and re-run /worktwin-light-setup-windows later." -ForegroundColor Yellow
+            } else {
+                Write-Host ""
+                Write-Host "Disks with at least 50 GB free (the VHDX file lives on one of these):" -ForegroundColor Gray
+                foreach ($c in $candidates) {
+                    $freeGB = [Math]::Round($c.Free / 1GB, 1)
+                    Write-Host ("  {0}:   free {1} GB" -f $c.Name, $freeGB) -ForegroundColor Gray
+                }
+                $bestDisk = $candidates[0].Name
+                $bestFreeGB = [Math]::Round($candidates[0].Free / 1GB, 1)
+                Write-Host ""
+                $diskChoice = Read-Host "Which disk should host the VHDX file? (letter, default: $bestDisk)"
+                if ([string]::IsNullOrWhiteSpace($diskChoice)) { $diskChoice = $bestDisk }
+                $diskChoice = $diskChoice.TrimEnd(':').ToUpper()
+
+                if (-not ($candidates.Name -contains $diskChoice)) {
+                    Write-Host "letter $diskChoice not in the candidate list. Aborting." -ForegroundColor Yellow
+                } else {
+                    $sourceFreeGB = [Math]::Round((Get-PSDrive -Name $diskChoice).Free / 1GB, 1)
+
+                    # Suggerisci una lettera libera, preferendo le ultime dell'alfabeto.
+                    $usedLetters = (Get-Volume -ErrorAction SilentlyContinue).DriveLetter | Where-Object { $_ }
+                    $preferred = @('W','V','X','Y','Z','T','U','S','R','Q','P','O','N','M','L')
+                    $defaultLetter = ($preferred | Where-Object { $usedLetters -notcontains $_ } | Select-Object -First 1)
+                    if (-not $defaultLetter) { $defaultLetter = 'W' }
+
+                    $letterChoice = Read-Host "Drive letter to mount the Dev Drive at? (default: $defaultLetter)"
+                    if ([string]::IsNullOrWhiteSpace($letterChoice)) { $letterChoice = $defaultLetter }
+                    $letterChoice = $letterChoice.TrimEnd(':').ToUpper()
+
+                    # Default size cap: 100 GB se c'e spazio, altrimenti meta dello spazio libero, minimo 50.
+                    $defaultSize = [Math]::Min(100, [int]($sourceFreeGB / 2))
+                    if ($defaultSize -lt 50) { $defaultSize = 50 }
+                    $sizeAnswer = Read-Host "VHDX size cap in GB? (dynamic, grows on use, default: $defaultSize, min: 50)"
+                    if ([string]::IsNullOrWhiteSpace($sizeAnswer)) {
+                        $sizeChoice = $defaultSize
+                    } else {
+                        $sizeChoice = [int]$sizeAnswer
+                    }
+                    if ($sizeChoice -lt 50) { $sizeChoice = 50 }
+
+                    $vhdPath = "${diskChoice}:\worktwin-dev-drive.vhdx"
+
+                    Write-Host ""
+                    Write-Host "Plan:" -ForegroundColor Cyan
+                    Write-Host "  VHDX file: $vhdPath ($sourceFreeGB GB free on ${diskChoice}:)" -ForegroundColor Gray
+                    Write-Host "  Size cap:  $sizeChoice GB (dynamic, grows only when used)" -ForegroundColor Gray
+                    Write-Host "  Mount as:  ${letterChoice}:" -ForegroundColor Gray
+                    Write-Host "  + scheduled task: auto-mount at every system boot" -ForegroundColor Gray
+                    Write-Host ""
+                    $confirm = Read-Host "Proceed? Windows will ask for admin permission (yes/no)"
+
+                    if ($confirm -ne 'yes') {
+                        Write-Host "aborted. Run /worktwin-light-setup-windows inside Claude Code when ready." -ForegroundColor Yellow
+                    } else {
+                        $setupScript = Join-Path $Target "worktwin\bin\worktwin-light-setup-windows.ps1"
+                        if (-not (Test-Path $setupScript)) {
+                            Write-Host "ERROR: setup script missing at $setupScript" -ForegroundColor Red
+                        } else {
+                            Write-Host ""
+                            Write-Host "Launching setup. Accept the UAC prompt when Windows asks." -ForegroundColor Cyan
+                            & $setupScript -VhdPath $vhdPath -SizeGB $sizeChoice -DriveLetter $letterChoice
+                        }
+                    }
+                }
+            }
+        }
     }
 }
