@@ -20,6 +20,21 @@ State files live in `$(git rev-parse --git-common-dir)/parallel/`, not in `.git/
 
 If the directory is empty but you know there are worktrees, fall back to `git worktree list` to find them and pass the branch names explicitly to `/worktwin-ship` or `/worktwin-finalize`.
 
+## "task not found" but the Dev Drive auto-mount task is registered
+
+If you check the scheduled task from a non-admin PowerShell with `Get-ScheduledTask -TaskName 'worktwin-mount-<vhd-name>'`, you may get `$null` even though the task exists. This is a Windows quirk: tasks with principal `SYSTEM` are not visible to non-admin callers, and `Get-ScheduledTask` returns no match silently rather than raising "access denied". Two ways to verify correctly from any shell:
+
+```powershell
+schtasks /query /TN 'worktwin-mount-worktwin-dev-drive'
+```
+
+Differentiate the outcomes by the error message:
+
+- `ERRORE: Impossibile trovare il file specificato.` / `ERROR: The system cannot find the file specified.` -> the task really does not exist; the setup did not register it. Run `/worktwin-light-teardown-windows -RegisterAutoMountOnly -VhdPath <your.vhdx>` to repair.
+- `ERRORE: Accesso negato.` / `ERROR: Access is denied.` -> the task exists and is registered correctly. You just cannot see it without admin. This is the normal state.
+
+If you really need to inspect the task object, relaunch PowerShell as Administrator and `Get-ScheduledTask` will then return the full object.
+
 ## `worktwin-merge-solver` says it needs jq
 
 The bash flavour of `worktwin-merge-solver` builds deeply nested JSON (groups, conflicts, worker contexts) and uses `jq` to keep that logic compact and correct. `jq` is a hard requirement only for that script in the bash flavour. Every other worktwin bash script has a jq-optional fallback, and the PowerShell flavour of every script (including `worktwin-merge-solver.ps1`) uses native `ConvertTo-Json` / `ConvertFrom-Json` and does not need `jq` at all.

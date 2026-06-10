@@ -338,7 +338,12 @@ Write-Host "Next steps:" -ForegroundColor Green
 Write-Host "  1. Re-run /worktwin-light-doctor $DriveLetter`:\ inside Claude Code to confirm light mode is available." -ForegroundColor Gray
 Write-Host "  2. Move or clone your large repos under $DriveLetter`:\, or configure a light-mode base mapping." -ForegroundColor Gray
 if (-not $SkipAutoMountTask) {
+    $taskNameForHint = "worktwin-mount-" + [IO.Path]::GetFileNameWithoutExtension($VhdPath)
     Write-Host "  3. Reboot once to verify the auto-mount task brings $DriveLetter`: back automatically." -ForegroundColor Gray
+    Write-Host "     verify the task exists at any time with:" -ForegroundColor Gray
+    Write-Host "       schtasks /query /TN '$taskNameForHint'" -ForegroundColor Gray
+    Write-Host "     (do not use Get-ScheduledTask from a non-admin shell - it cannot see SYSTEM" -ForegroundColor Gray
+    Write-Host "      tasks and returns no match silently, which looks like a false negative.)" -ForegroundColor Gray
 }
 Write-Host ""
 Write-Host "To remove this Dev Drive later:" -ForegroundColor Gray
