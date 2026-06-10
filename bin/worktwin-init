@@ -152,15 +152,41 @@ if [ "$LIGHT_MODE" != "off" ]; then
         AUTO_BASE_PARENT="/${DEV_DRIVE_LETTER}/.worktwin-bases"
         AUTO_BASE_PATH="$AUTO_BASE_PARENT/$REPO_NAME"
         mkdir -p "$AUTO_BASE_PARENT" 2>/dev/null || true
-        if [ ! -d "$AUTO_BASE_PATH/.git" ]; then
-          WARNINGS+=("first spawn for this repo on Dev Drive ${DEV_DRIVE_LETTER}: - auto-cloning the main repo to $AUTO_BASE_PATH (one-time cost)")
-          if ! git clone --quiet "$MAIN_REPO" "$AUTO_BASE_PATH" 2>/dev/null; then
-            WARNINGS+=("auto-clone to Dev Drive failed; falling back to standard worktree")
+
+        # The base is a linked git worktree of the main repo, not a
+        # full clone. This means:
+        # - No second .git database on disk: the base shares the main's
+        #   object store transparently. Disk cost = working tree only.
+        # - On reset --hard the base re-aligns to FROM_REF in place; we
+        #   do not need a remote / fetch dance.
+        # - Reference counting: when the last worker is gone, the base
+        #   worktree itself can be removed (handled in worktwin-clear).
+        # Detached HEAD on the base avoids reserving a branch name for
+        # bookkeeping.
+        BASE_REGISTERED=false
+        if [ -d "$AUTO_BASE_PATH" ] && \
+           git -C "$MAIN_REPO" worktree list --porcelain 2>/dev/null \
+             | grep -qx "worktree $AUTO_BASE_PATH"; then
+          BASE_REGISTERED=true
+        fi
+
+        if [ "$BASE_REGISTERED" = "false" ]; then
+          if [ -e "$AUTO_BASE_PATH" ]; then
+            # Stale directory not registered as a worktree - clean it.
             rm -rf "$AUTO_BASE_PATH" 2>/dev/null || true
           fi
+          WARNINGS+=("first spawn for this repo on Dev Drive ${DEV_DRIVE_LETTER}: - creating a base worktree at $AUTO_BASE_PATH (one-time cost, removed automatically when the last worker is cleared)")
+          if ! git -C "$MAIN_REPO" worktree add --detach --quiet "$AUTO_BASE_PATH" "$FROM_REF" 2>/dev/null; then
+            WARNINGS+=("auto base worktree creation failed; falling back to standard worktree")
+            rm -rf "$AUTO_BASE_PATH" 2>/dev/null || true
+          else
+            BASE_REGISTERED=true
+          fi
         fi
-        if [ -d "$AUTO_BASE_PATH/.git" ]; then
+
+        if [ "$BASE_REGISTERED" = "true" ]; then
           LIGHT_BASE_PATH="$AUTO_BASE_PATH"
+          # remember for housekeeping by other commands
           if [ -x "$LIGHT_BASE_TOOL" ] && command -v jq >/dev/null 2>&1; then
             "$LIGHT_BASE_TOOL" set "$MAIN_REPO" "$AUTO_BASE_PATH" >/dev/null 2>&1 || true
           fi
