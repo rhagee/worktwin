@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/worktwin-dark.png">
-    <img src="docs/worktwin-light.png" alt="worktwin" width="180">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/worktwin-light.png">
+    <img src="docs/worktwin-dark.png" alt="worktwin" width="320">
   </picture>
 </p>
 
