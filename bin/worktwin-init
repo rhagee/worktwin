@@ -101,6 +101,36 @@ CLONE_SOURCE=""
 LIGHT_ACTIVE=false
 LIGHT_REASON="not attempted"
 
+# Serialize concurrent spawns for the same (repo, from_branch). Two
+# /worktwin invocations started from different Claude Code panes
+# within ~1s of each other can race on the auto-discovered base:
+# both see the base missing, both call `git worktree add` on the same
+# path, the second gets "exists already" and silently drops to a
+# standard worktree on the main's volume. The lock is a directory
+# under the main repo's git_common_dir/parallel; mkdir is atomic on
+# every supported filesystem. The lock is per-from_branch so spawns
+# from different source branches still run in parallel.
+FROM_BRANCH_SLUG=$(echo "$FROM_BRANCH" | sed 's|[^a-zA-Z0-9._-]|-|g')
+SPAWN_LOCK_DIR="$GIT_COMMON_DIR/parallel/.spawn-${FROM_BRANCH_SLUG}.lock"
+mkdir -p "$GIT_COMMON_DIR/parallel" 2>/dev/null || true
+SPAWN_LOCK_ACQUIRED=false
+# 120 attempts × 0.5s = 60s. A spawn completes in << 1s normally;
+# 60s of patience covers any reasonable wait.
+for attempt in $(seq 1 120); do
+  if mkdir "$SPAWN_LOCK_DIR" 2>/dev/null; then
+    SPAWN_LOCK_ACQUIRED=true
+    break
+  fi
+  sleep 0.5
+done
+release_spawn_lock() {
+  if [ "$SPAWN_LOCK_ACQUIRED" = "true" ]; then
+    rmdir "$SPAWN_LOCK_DIR" 2>/dev/null || true
+    SPAWN_LOCK_ACQUIRED=false
+  fi
+}
+trap release_spawn_lock EXIT
+
 # Helper: run light-check on a path and echo cow_capable boolean
 check_cow_capable() {
   local target="$1" json cow
@@ -149,7 +179,6 @@ if [ "$LIGHT_MODE" != "off" ]; then
   if [ -z "$LIGHT_BASE_PATH" ] || [ ! -d "$LIGHT_BASE_PATH" ]; then
     LIGHT_BASE_PATH=""
     BASE_KIND=""
-    FROM_BRANCH_SLUG=$(echo "$FROM_BRANCH" | sed 's|[^a-zA-Z0-9._-]|-|g')
     MAIN_COW=$(check_cow_capable "$MAIN_REPO")
 
     AUTO_BASE_PARENT=""
@@ -175,11 +204,28 @@ if [ "$LIGHT_MODE" != "off" ]; then
       AUTO_BASE_PATH="$AUTO_BASE_PARENT/${REPO_NAME}__${FROM_BRANCH_SLUG}"
       mkdir -p "$AUTO_BASE_PARENT" 2>/dev/null || true
 
+      # The spawn lock above already serializes concurrent invocations
+      # for this (repo, from_branch), so a simple presence check is
+      # race-free here.
+      # Detect if AUTO_BASE_PATH is already a linked worktree of the
+      # main. We probe the base's own .git: if it resolves to a path
+      # under $GIT_COMMON_DIR/worktrees/, it is a linked worktree of
+      # the main and registered. This is path-format agnostic, so it
+      # survives the Git-Bash /w/ vs Windows W:/ mismatch that breaks
+      # any string-based comparison against `git worktree list` output.
       BASE_REGISTERED=false
-      if [ -d "$AUTO_BASE_PATH" ] && \
-         git -C "$MAIN_REPO" worktree list --porcelain 2>/dev/null \
-           | grep -qx "worktree $AUTO_BASE_PATH"; then
-        BASE_REGISTERED=true
+      if [ -d "$AUTO_BASE_PATH" ]; then
+        BASE_GIT_DIR=$(git -C "$AUTO_BASE_PATH" rev-parse --git-dir 2>/dev/null || true)
+        if [ -n "$BASE_GIT_DIR" ]; then
+          # Convert to absolute path for the comparison.
+          case "$BASE_GIT_DIR" in
+            /*|[A-Za-z]:[\\/]*) ;;
+            *) BASE_GIT_DIR="$(cd "$AUTO_BASE_PATH" && cd "$BASE_GIT_DIR" 2>/dev/null && pwd || echo "")" ;;
+          esac
+          case "$BASE_GIT_DIR" in
+            */worktrees/*) BASE_REGISTERED=true ;;
+          esac
+        fi
       fi
 
       if [ "$BASE_REGISTERED" = "false" ]; then
