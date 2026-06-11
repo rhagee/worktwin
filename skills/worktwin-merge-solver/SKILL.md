@@ -13,13 +13,18 @@ Resolve sibling-vs-sibling PR conflicts for a set of worktwin worker branches.
 
 ## TL;DR — what this command checks (read this first, do not improvise)
 
-**What it checks**: do two or more worker branches that all want to land into the **same base** (their `from_branch`) collide **with each other** when merged sequentially into that base?
+**What it checks**: take the branches the user passed in. Group them by their `from_branch` (the base they want to land into). For each group with 2+ siblings, ask: "do these sibling branches collide **with each other** when merged sequentially into the shared base?". Anything else is out of scope.
 
-**What it does NOT check**: whether any single branch conflicts with its base. That is the wrong question — every individual branch is, by construction, a clean fast-forward of its base. Asking `git diff branch..base` is meaningless here; the right question is `git merge-tree --merge-base=<base> A B`, which the `discover` subcommand below already runs for you. Trust its output, do not re-derive it.
+**What it does NOT check**:
 
-Concrete example: `feat/dark-toggle` and `feat/branding` both target `main`. The solver asks: "if `feat/dark-toggle` lands first and then `feat/branding` tries to land, will git's three-way merge produce conflict markers?". If yes → conflicting group, resolve. If no → both PRs can be merged independently; nothing for the solver to do.
+1. Whether any single branch conflicts with its base. Every individual branch is, by construction, a clean fast-forward of its base — that question is meaningless here. Do not run `git diff branch..base` or anything similar to "verify".
+2. Whether a branch targeting `main` conflicts with a branch targeting `develop`. Different `from_branch` → different groups → never compared. There is no possible PR conflict across groups, because the two branches would land in different places.
 
-If after running `discover` the output reports `status: clean` or `status: alone` for every group, the answer is **genuinely** nothing to solve — do not second-guess by running other checks. Move on.
+The right question, for each group, is `git merge-tree --merge-base=<base> A B`. The `discover` subcommand below already runs that pairwise for every group with 2+ siblings. Trust its output, do not re-derive it with side checks.
+
+Concrete example: user passes `feat/dark-toggle feat/branding feat/billing`. `dark-toggle` and `branding` both target `main`; `billing` targets `develop`. Two groups: `main: {dark-toggle, branding}` and `develop: {billing}`. The solver only asks the conflict question inside the `main` group (singleton groups have nothing to compare). `billing` is never compared against `dark-toggle` or `branding` because they land in different bases.
+
+If after running `discover` every group is `status: clean` or `status: alone`, the answer is **genuinely** nothing to solve — do not second-guess by running other checks. Move on.
 
 ## How the work flows
 
