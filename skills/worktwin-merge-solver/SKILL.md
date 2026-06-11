@@ -1,6 +1,6 @@
 ---
 name: worktwin-merge-solver
-description: Resolve cross-PR conflicts between two or more worktwin workers that target the same base branch. Reads each worker's WORKTWIN.md, task, commits, and diff to understand intent, then proposes per-file resolutions, dialogues with the user, and emits a single combined PR per conflicting group so each PR is "review and one click" away from merging.
+description: Resolve sibling-vs-sibling conflicts between two or more worktwin worker branches that all want to land into the same target base branch. Detects whether branch A and branch B will collide WITH EACH OTHER when merged sequentially into the base (via `git merge-tree --merge-base=<base> A B`), reads each worker's WORKTWIN.md, task, commits, and per-file diff to understand intent, proposes per-file resolutions, dialogues with the user, and emits a single combined PR per conflicting group.
 argument-hint: "<branch> [<branch> ...]   in the order you want them merged"
 arguments: [branches]
 disable-model-invocation: true
@@ -9,9 +9,21 @@ allowed-tools: Bash(git *), Bash(gh *), Bash(jq *), Bash(ls *), Bash(test *), Ba
 
 # worktwin-merge-solver
 
-Resolve cross-PR conflicts for a set of worktwin workers.
+Resolve sibling-vs-sibling PR conflicts for a set of worktwin worker branches.
 
-The mechanical work runs through `bin/worktwin-merge-solver` (subcommands `discover`, `prepare`, `merge-step`, `finalize-step`, `push`, `open-pr`, `close-original`). Your job is to read the JSON it emits, walk the user through each group, write the actual conflict resolutions in files, and confirm the destructive steps (push, PR open, original PR closing) with the user before doing them.
+## TL;DR — what this command checks (read this first, do not improvise)
+
+**What it checks**: do two or more worker branches that all want to land into the **same base** (their `from_branch`) collide **with each other** when merged sequentially into that base?
+
+**What it does NOT check**: whether any single branch conflicts with its base. That is the wrong question — every individual branch is, by construction, a clean fast-forward of its base. Asking `git diff branch..base` is meaningless here; the right question is `git merge-tree --merge-base=<base> A B`, which the `discover` subcommand below already runs for you. Trust its output, do not re-derive it.
+
+Concrete example: `feat/dark-toggle` and `feat/branding` both target `main`. The solver asks: "if `feat/dark-toggle` lands first and then `feat/branding` tries to land, will git's three-way merge produce conflict markers?". If yes → conflicting group, resolve. If no → both PRs can be merged independently; nothing for the solver to do.
+
+If after running `discover` the output reports `status: clean` or `status: alone` for every group, the answer is **genuinely** nothing to solve — do not second-guess by running other checks. Move on.
+
+## How the work flows
+
+The mechanical work runs through `bin/worktwin-merge-solver` (subcommands `discover`, `prepare`, `merge-step`, `finalize-step`, `push`, `open-pr`, `close-original`). Your job is to read the JSON it emits, walk the user through each conflicting group, write the actual conflict resolutions in files, and confirm the destructive steps (push, PR open, original PR closing) with the user before doing them.
 
 ## 0. Inputs and ordering
 
@@ -36,9 +48,13 @@ done
 
 ## 2. Discover and report
 
+This is the single source of truth for "do these branches conflict?". Run it once with the user's branches, parse the JSON, trust the verdict.
+
 ```bash
 "$WORKTWIN_BIN/worktwin-merge-solver" discover "$@"
 ```
+
+Under the hood it groups the input branches by their `from_branch` and, for every group with two or more branches, runs `git merge-tree --merge-base=<base> A B` pairwise. That is exactly the sibling-vs-sibling collision check. Do not run your own `git diff`, `git log`, or other side checks before reading the result; they answer the wrong question.
 
 Parse the JSON. Keys: `input_order`, `workers`, `groups`, `missing`.
 
