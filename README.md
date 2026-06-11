@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/worktwin-dark.png">
+    <img src="docs/worktwin-light.png" alt="worktwin" width="180">
+  </picture>
+</p>
+
 # worktwin
 
 > Parallel Claude Code agents on isolated branches, with an intent-aware merge-conflict solver. From "async PRs" to "review and one click to merge".
